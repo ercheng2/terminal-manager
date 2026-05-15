@@ -422,8 +422,9 @@ class TerminalApp:
         self.config = load_config()
         self.root = tk.Tk()
         self.root.title(f'坤展成终端管理系统 v1.0')
-        self.root.geometry('780x560')
-        self.root.resizable(False, False)
+        self.root.geometry('800x680')
+        self.root.resizable(True, True)
+        self.root.minsize(800, 680)
 
         # 初始化WebSocket客户端
         self.ws_client = WSClient(on_command=self._on_command)
@@ -457,17 +458,17 @@ class TerminalApp:
     # ==================== UI构建 ====================
     def _build_ui(self):
         # ===== 顶部标题区 =====
-        title_frame = tk.Frame(self.root, bg='#2c3e50', height=70)
+        title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
 
         tk.Label(title_frame, text='坤展成终端管理系统 v1.0',
-                font=('Microsoft YaHei', 16, 'bold'), fg='white', bg='#2c3e50').pack(pady=(10, 0))
+                font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
-                font=('Microsoft YaHei', 9), fg='#bdc3c7', bg='#2c3e50').pack()
+                font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
 
         # ===== 状态栏 =====
-        status_frame = tk.Frame(self.root, bg='#ecf0f1', height=35)
+        status_frame = tk.Frame(self.root, bg='#ecf0f1', height=30)
         status_frame.pack(fill='x')
         status_frame.pack_propagate(False)
 
@@ -607,8 +608,8 @@ class TerminalApp:
         tk.Button(startup_btn_frame, text='启用/禁用', width=10, command=self._toggle_startup).pack(side='left', padx=3)
 
         # ===== 底部按钮 =====
-        bottom_frame = tk.Frame(self.root, bg='#ecf0f1', height=40)
-        bottom_frame.pack(fill='x')
+        bottom_frame = tk.Frame(self.root, bg='#ecf0f1', height=36)
+        bottom_frame.pack(fill='x', side='bottom')
         bottom_frame.pack_propagate(False)
 
         tk.Button(bottom_frame, text='激活软件', width=10, bg='#3498db', fg='white',

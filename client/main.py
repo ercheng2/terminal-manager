@@ -67,41 +67,159 @@ class VolumeControl:
     _bg_running = False
     _read_event = None
     _cmd_queue = None
-    _diag_info = ''  # 诊断信息
+    _app_ref = None  # 主窗口引用，用于首次读取后刷新UI
+    _first_read_done = False
+
+    _CS_CODE = r'''
+using System;
+using System.Runtime.InteropServices;
+public class V{
+ [ComImport,GUID("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+ class Enum{}
+
+ [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IEnum{
+  void X1();
+  void GetDefault(int df,int rl,out object dev);
+ }
+
+ [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IDev{
+  void Activate(ref Guid iid,int cls,IntPtr p,out object vol);
+ }
+
+ [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IVol{
+  int RegisterControlChangeNotify(IntPtr cb);
+  int UnregisterControlChangeNotify(IntPtr cb);
+  int GetChannelCount(out uint c);
+  int SetMasterVolumeLevel(float db,ref Guid g);
+  int SetMasterVolumeLevelScalar(float f,ref Guid g);
+  int GetMasterVolumeLevel(out float db);
+  int GetMasterVolumeLevelScalar(out float f);
+  int SetChannelVolumeLevel(uint ch,float db,ref Guid g);
+  int SetChannelVolumeLevelScalar(uint ch,float f,ref Guid g);
+  int GetChannelVolumeLevel(uint ch,out float db);
+  int GetChannelVolumeLevelScalar(uint ch,out float f);
+  int SetMute(int m,ref Guid g);
+  int GetMute(out int m);
+  int GetVolumeStepInfo(out uint s,out uint sc);
+  int VolumeStepUp(ref Guid g);
+  int VolumeStepDown(ref Guid g);
+  int QueryHardwareSupport(out uint h);
+  int GetVolumeRange(out float min,out float max,out float inc);
+ }
+
+ static IVol GetVol(){
+  var e=(IEnum)new Enum();
+  object d;e.GetDefault(0,0,out d);
+  var dev=(IDev)d;
+  var iid=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
+  object v;dev.Activate(ref iid,0,IntPtr.Zero,out v);
+  return(IVol)v;
+ }
+
+ public static void Main(string[] a){
+  if(a.Length==0)return;
+  try{
+   var v=GetVol();
+   var c=a[0].ToLower();
+   Guid g=Guid.Empty;
+   if(c=="get"){float f;v.GetMasterVolumeLevelScalar(out f);Console.Write((int)Math.Round(f*100));}
+   else if(c=="mute"){int m;v.GetMute(out m);Console.Write(m);}
+   else if(c=="set"&&a.Length>1){float f=float.Parse(a[1])/100f;v.SetMasterVolumeLevelScalar(f,ref g);Console.Write("OK");}
+   else if(c=="setmute"&&a.Length>1){int m=int.Parse(a[1]);v.SetMute(m,ref g);Console.Write("OK");}
+   else if(c=="test"){float f;v.GetMasterVolumeLevelScalar(out f);int m;v.GetMute(out m);Console.Write("VOL="+((int)Math.Round(f*100))+" MUTE="+m);}
+  }catch(Exception ex){Console.Write("ERR:"+ex.Message);}
+ }
+}
+'''
 
     @staticmethod
-    def _find_helper():
-        """从PyInstaller bundle提取VolumeHelper.exe（始终覆盖旧版）"""
-        exe_path = os.path.join(BASE_DIR, 'VolumeHelper.exe')
+    def _ensure_helper():
+        """确保VolumeHelper.exe可用：编译到%TEMP%并验证"""
+        temp_dir = os.path.join(os.environ.get('TEMP', '.'), 'kzc_terminal')
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+        except:
+            temp_dir = os.environ.get('TEMP', '.')
+        exe_path = os.path.join(temp_dir, 'VolumeHelper.exe')
 
-        if getattr(sys, 'frozen', False):
-            bundle_path = os.path.join(sys._MEIPASS, 'VolumeHelper.exe')
-            if os.path.exists(bundle_path):
-                try:
-                    import shutil
-                    shutil.copy2(bundle_path, exe_path)
+        # 如果已存在，先test验证
+        if os.path.exists(exe_path):
+            try:
+                r = subprocess.run([exe_path, 'test'],
+                                 capture_output=True, text=True, timeout=3,
+                                 creationflags=0x08000000)
+                out = r.stdout.strip()
+                if out.startswith('VOL=') and 'ERR' not in out:
                     VolumeControl._helper_exe = exe_path
                     VolumeControl._helper_ready = True
-                    VolumeControl._diag_info = f'helper: bundle→{exe_path}'
-                    print(f'[音量] VolumeHelper.exe 已从bundle覆盖到: {exe_path}')
+                    print(f'[音量] VolumeHelper.exe 验证通过: {out}')
                     return True
-                except Exception as e:
-                    VolumeControl._helper_exe = bundle_path
+                else:
+                    print(f'[音量] 旧VolumeHelper.exe 测试失败: {out}，删除重新编译')
+                    try:
+                        os.remove(exe_path)
+                    except:
+                        pass
+            except Exception as e:
+                print(f'[音量] 旧VolumeHelper.exe 测试异常: {e}，删除重新编译')
+                try:
+                    os.remove(exe_path)
+                except:
+                    pass
+
+        # 编译新的VolumeHelper.exe
+        cs_path = os.path.join(temp_dir, 'VolumeHelper.cs')
+        try:
+            with open(cs_path, 'w', encoding='utf-8') as f:
+                f.write(VolumeControl._CS_CODE)
+        except Exception as e:
+            print(f'[音量] 写C#源码失败: {e}')
+            return False
+
+        windir = os.environ.get('WINDIR', r'C:\Windows')
+        csc_paths = [
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v3.5', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v3.5', 'csc.exe'),
+        ]
+        csc = None
+        for p in csc_paths:
+            if os.path.exists(p):
+                csc = p
+                break
+
+        if not csc:
+            print('[音量] 未找到csc编译器')
+            return False
+
+        try:
+            r = subprocess.run([csc, '/nologo', '/optimize', '/out:' + exe_path, cs_path],
+                             capture_output=True, text=True, timeout=15)
+            if os.path.exists(exe_path):
+                # 编译成功，验证
+                r2 = subprocess.run([exe_path, 'test'],
+                                  capture_output=True, text=True, timeout=3,
+                                  creationflags=0x08000000)
+                out = r2.stdout.strip()
+                if out.startswith('VOL='):
+                    VolumeControl._helper_exe = exe_path
                     VolumeControl._helper_ready = True
-                    VolumeControl._diag_info = f'helper: bundle直接用 {bundle_path}'
-                    print(f'[音量] VolumeHelper.exe 从bundle直接用: {bundle_path}')
+                    print(f'[音量] VolumeHelper.exe 编译并验证成功: {out}')
+                    try:
+                        os.remove(cs_path)
+                    except:
+                        pass
                     return True
-
-        # 非frozen模式（开发调试）：直接用BASE_DIR的
-        if os.path.exists(exe_path):
-            VolumeControl._helper_exe = exe_path
-            VolumeControl._helper_ready = True
-            VolumeControl._diag_info = f'helper: {exe_path}'
-            print(f'[音量] VolumeHelper.exe 已找到: {exe_path}')
-            return True
-
-        VolumeControl._diag_info = 'helper: 未找到'
-        print('[音量] VolumeHelper.exe 未找到')
+                else:
+                    print(f'[音量] VolumeHelper.exe 编译后验证失败: {out}')
+            else:
+                print(f'[音量] 编译失败: {r.stderr}')
+        except Exception as e:
+            print(f'[音量] 编译异常: {e}')
         return False
 
     @staticmethod
@@ -116,12 +234,9 @@ class VolumeControl:
             val = r.stdout.strip()
             if val and not val.startswith('ERR'):
                 VolumeControl._cached_volume = int(float(val))
-                VolumeControl._diag_info = f'vol={val}'
-            elif val.startswith('ERR'):
-                VolumeControl._diag_info = f'get_err: {val}'
-                print(f'[音量] get错误: {val}')
+            else:
+                print(f'[音量] get返回异常: {val}')
         except Exception as e:
-            VolumeControl._diag_info = f'get_fail: {e}'
             print(f'[音量] get异常: {e}')
         try:
             r = subprocess.run([VolumeControl._helper_exe, 'mute'],
@@ -130,25 +245,10 @@ class VolumeControl:
             val = r.stdout.strip()
             if val and not val.startswith('ERR'):
                 VolumeControl._cached_muted = (val == '1')
-            elif val.startswith('ERR'):
-                VolumeControl._diag_info += f' mute_err: {val}'
-                print(f'[音量] mute错误: {val}')
+            else:
+                print(f'[音量] mute返回异常: {val}')
         except Exception as e:
-            VolumeControl._diag_info += f' mute_fail: {e}'
             print(f'[音量] mute异常: {e}')
-
-    @staticmethod
-    def _run_test():
-        """运行VolumeHelper.exe test命令，返回结果"""
-        if not VolumeControl._helper_exe:
-            return 'no helper'
-        try:
-            r = subprocess.run([VolumeControl._helper_exe, 'test'],
-                             capture_output=True, text=True, timeout=5,
-                             creationflags=0x08000000)
-            return r.stdout.strip() or f'(empty, stderr={r.stderr.strip()[:100]})'
-        except Exception as e:
-            return f'error: {e}'
 
     @staticmethod
     def _helper_set_volume(val):
@@ -158,12 +258,8 @@ class VolumeControl:
             r = subprocess.run([VolumeControl._helper_exe, 'set', str(val)],
                              capture_output=True, text=True, timeout=5,
                              creationflags=0x08000000)
-            out = r.stdout.strip()
-            if out.startswith('ERR'):
-                print(f'[音量] set错误: {out}')
-            return out == 'OK'
-        except Exception as e:
-            print(f'[音量] set异常: {e}')
+            return r.stdout.strip() == 'OK'
+        except:
             return False
 
     @staticmethod
@@ -174,16 +270,13 @@ class VolumeControl:
             r = subprocess.run([VolumeControl._helper_exe, 'setmute', str(int(mute))],
                              capture_output=True, text=True, timeout=5,
                              creationflags=0x08000000)
-            out = r.stdout.strip()
-            if out.startswith('ERR'):
-                print(f'[音量] setmute错误: {out}')
-            return out == 'OK'
-        except Exception as e:
-            print(f'[音量] setmute异常: {e}')
+            return r.stdout.strip() == 'OK'
+        except:
             return False
 
     @staticmethod
-    def start_bg_monitor():
+    def start_bg_monitor(app=None):
+        VolumeControl._app_ref = app
         VolumeControl._read_event = threading.Event()
         VolumeControl._cmd_queue = queue.Queue()
         VolumeControl._bg_running = True
@@ -198,14 +291,21 @@ class VolumeControl:
 
     @staticmethod
     def _bg_loop():
-        VolumeControl._find_helper()
-        # 先运行test诊断
-        test_result = VolumeControl._run_test()
-        VolumeControl._diag_info = f'test: {test_result}'
-        print(f'[音量] VolumeHelper.exe test结果: {test_result}')
+        """后台：编译helper → 验证 → 读取初始音量 → 通知UI → 每3秒轮询"""
+        VolumeControl._ensure_helper()
         if VolumeControl._helper_ready:
             VolumeControl._read_volume()
-            print(f'[音量] 初始读取: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
+            print(f'[音量] ★首次读取: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
+            VolumeControl._first_read_done = True
+            # 立即通知UI刷新
+            if VolumeControl._app_ref:
+                try:
+                    VolumeControl._app_ref.root.after(0, VolumeControl._app_ref._update_volume_display)
+                except:
+                    pass
+        else:
+            print('[音量] ★VolumeHelper不可用，使用keybd_event备用')
+
         while VolumeControl._bg_running:
             while not VolumeControl._cmd_queue.empty():
                 try:
@@ -289,11 +389,8 @@ class VolumeControl:
         return VolumeControl._cached_muted
 
     @staticmethod
-    def get_diag():
-        return VolumeControl._diag_info
-
-    @staticmethod
     def _key_event(vk_code, press_count=1):
+        """keybd_event备用方案"""
         try:
             for _ in range(press_count):
                 ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
@@ -775,7 +872,7 @@ class TerminalApp:
         # 启动中控UDP/TCP监听
         self.control_listener.start(udp_port=5005, tcp_port=5006)
         # 启动后台音量监控
-        VolumeControl.start_bg_monitor()
+        VolumeControl.start_bg_monitor(app=self)
 
         self._refresh_status()
 
@@ -995,8 +1092,7 @@ class TerminalApp:
         vol = VolumeControl.get_volume()
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
-        diag = VolumeControl.get_diag()
-        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} [{diag}]')
+        self.lbl_volume.config(text=f'音量：{vol}%{mute_str}')
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

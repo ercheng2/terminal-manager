@@ -20,14 +20,10 @@ jobs:
           cd client
           pip install -r requirements.txt
           pip install pyinstaller
-      - name: Compile VolumeHelper
-        run: |
-          cd client
-          C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /optimize /out:VolumeHelper.exe volume_helper.cs
       - name: Build client exe
         run: |
           cd client
-          pyinstaller --name "TerminalManager" --onefile --add-data "VolumeHelper.exe;." --hidden-import pystray --hidden-import PIL --hidden-import psutil --hidden-import urllib --clean main.py
+          pyinstaller --name "TerminalManager" --onefile --hidden-import pystray --hidden-import PIL --hidden-import psutil --hidden-import urllib --clean main.py
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
         with:

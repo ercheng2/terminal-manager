@@ -52,92 +52,114 @@ def save_config(cfg):
 
 # ===== 音量控制 (Windows) =====
 class VolumeControl:
-    """Windows音量控制，基于pycaw，多重fallback"""
+    """Windows音量控制，优先pycaw，fallback用ctypes+SendMessage"""
 
     @staticmethod
-    def _get_interface():
-        """获取音频接口"""
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-        from comtypes import CLSCTX_ALL
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = interface.QueryInterface(IAudioEndpointVolume)
-        return volume
+    def _try_pycaw():
+        """尝试用pycaw控制音量"""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            return volume
+        except:
+            return None
 
     @staticmethod
     def get_volume():
         """获取当前音量 0-100"""
         try:
-            volume = VolumeControl._get_interface()
-            return int(round(volume.GetMasterVolumeLevelScalar() * 100))
-        except Exception as e:
-            print(f'[音量] 获取失败: {e}')
-            return -1
+            volume = VolumeControl._try_pycaw()
+            if volume:
+                return int(round(volume.GetMasterVolumeLevelScalar() * 100))
+        except:
+            pass
+        # fallback: 用nircmd或返回0
+        return 0
 
     @staticmethod
     def set_volume(val):
         """设置音量 0-100"""
         try:
-            volume = VolumeControl._get_interface()
-            volume.SetMasterVolumeLevelScalar(val / 100.0, None)
-            print(f'[音量] 设置为 {val}%')
-            return True
-        except Exception as e:
-            print(f'[音量] 设置失败: {e}')
-            # fallback: 用nircmd或powershell
-            try:
-                subprocess.run(['powershell', '-Command',
-                    f'$wshShell = New-Object -ComObject WScript.Shell; 1..{val//2} | % {{$wshShell.SendKeys([char]174)}}'],
-                    timeout=5, capture_output=True)
+            volume = VolumeControl._try_pycaw()
+            if volume:
+                volume.SetMasterVolumeLevelScalar(val / 100.0, None)
+                print(f'[音量] 设置为 {val}%')
                 return True
-            except:
-                return False
+        except:
+            pass
+        # fallback: 用Windows音量合成器命令
+        try:
+            subprocess.run(['powershell', '-Command',
+                f'$vol = {val}/100; '
+                f'$wshShell = New-Object -ComObject WScript.Shell; '
+                f'1..50 | ForEach-Object {{$wshShell.SendKeys([char]174)}}; '  # 先降到0
+                f'1..{val//2} | ForEach-Object {{$wshShell.SendKeys([char]175)}}'],  # 再升到目标
+                timeout=10, capture_output=True)
+            print(f'[音量] fallback设置 {val}%')
+            return True
+        except:
+            return False
 
     @staticmethod
     def volume_up(step=10):
         v = VolumeControl.get_volume()
-        if v >= 0:
-            VolumeControl.set_volume(min(100, v + step))
-            return True
-        return False
+        return VolumeControl.set_volume(min(100, v + step))
 
     @staticmethod
     def volume_down(step=10):
         v = VolumeControl.get_volume()
-        if v >= 0:
-            VolumeControl.set_volume(max(0, v - step))
-            return True
-        return False
+        return VolumeControl.set_volume(max(0, v - step))
 
     @staticmethod
     def mute():
         try:
-            volume = VolumeControl._get_interface()
-            volume.SetMute(1, None)
-            print('[音量] 已静音')
+            volume = VolumeControl._try_pycaw()
+            if volume:
+                volume.SetMute(1, None)
+                return True
+        except:
+            pass
+        # fallback: 发送静音键
+        try:
+            subprocess.run(['powershell', '-Command',
+                '$wshShell = New-Object -ComObject WScript.Shell; $wshShell.SendKeys([char]173)'],
+                timeout=5, capture_output=True)
             return True
-        except Exception as e:
-            print(f'[音量] 静音失败: {e}')
+        except:
             return False
 
     @staticmethod
     def unmute():
         try:
-            volume = VolumeControl._get_interface()
-            volume.SetMute(0, None)
-            print('[音量] 已取消静音')
+            volume = VolumeControl._try_pycaw()
+            if volume:
+                volume.SetMute(0, None)
+                return True
+        except:
+            pass
+        # fallback: 发送两次静音键（切换）
+        try:
+            subprocess.run(['powershell', '-Command',
+                '$wshShell = New-Object -ComObject WScript.Shell; $wshShell.SendKeys([char]173)'],
+                timeout=5, capture_output=True)
             return True
-        except Exception as e:
-            print(f'[音量] 取消静音失败: {e}')
+        except:
             return False
 
     @staticmethod
     def is_muted():
         try:
-            volume = VolumeControl._get_interface()
-            return volume.GetMute() == 1
+            volume = VolumeControl._try_pycaw()
+            if volume:
+                return volume.GetMute() == 1
         except:
-            return False
+            pass
+        return False
 
 
 # ===== 电源控制 =====
@@ -363,10 +385,13 @@ class WSClient:
         self.reconnect_interval = 5
         self._thread = None
         self._loop = None  # 保存asyncio事件循环
+        self._connect_event = threading.Event()  # 连接触发事件
 
     def configure(self, ip, port):
         self.server_ip = ip
         self.server_port = port
+        # 立即触发连接尝试
+        self._connect_event.set()
 
     def start(self):
         self.running = True
@@ -375,30 +400,38 @@ class WSClient:
 
     def stop(self):
         self.running = False
-        if self.ws and self._loop:
-            asyncio.run_coroutine_threadsafe(self.ws.close(), self._loop)
+        self._connect_event.set()  # 唤醒等待中的线程
 
     def _run_loop(self):
         """自动重连循环"""
         while self.running:
+            if not self.server_ip:
+                # 还没发现服务器，等待
+                self._connect_event.clear()
+                self._connect_event.wait(timeout=10)
+                continue
             try:
                 asyncio.run(self._connect_and_listen())
-            except:
-                pass
+            except Exception as e:
+                print(f'[WS] 连接异常: {e}')
             self.connected = False
             if self.running:
-                time.sleep(self.reconnect_interval)
+                # 等待重连，但可以被configure唤醒
+                self._connect_event.clear()
+                self._connect_event.wait(timeout=self.reconnect_interval)
 
     async def _connect_and_listen(self):
         import websockets
         if not self.server_ip:
-            return  # 还没发现服务器，等下一轮
+            return
         url = f'ws://{self.server_ip}:{self.server_port}/ws/client'
+        print(f'[WS] 正在连接 {url} ...')
         try:
             async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
                 self.ws = ws
                 self._loop = asyncio.get_event_loop()
                 self.connected = True
+                print(f'[WS] 已连接 {url}')
                 # 发送注册信息
                 info = SystemInfo.get_info()
                 await ws.send(json.dumps({
@@ -419,6 +452,7 @@ class WSClient:
                     except:
                         pass
         except Exception as e:
+            print(f'[WS] 连接失败: {e}')
             self.connected = False
 
     def send_result(self, task_id, status, msg=''):

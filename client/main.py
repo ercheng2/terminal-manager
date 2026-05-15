@@ -291,6 +291,85 @@ class SystemInfo:
             return ''
 
 
+# ===== UDP/TCP中控指令监听（兼容v1.1协议） =====
+class ControlListener:
+    """监听UDP和TCP中控指令，兼容原坤展成关机软件v1.1协议"""
+
+    def __init__(self, on_command=None):
+        self.on_command = on_command  # 回调：收到指令字符串
+        self.udp_port = 5005
+        self.tcp_port = 5006
+        self.running = False
+        self._udp_thread = None
+        self._tcp_thread = None
+
+    def start(self, udp_port=5005, tcp_port=5006):
+        self.udp_port = udp_port
+        self.tcp_port = tcp_port
+        self.running = True
+        self._udp_thread = threading.Thread(target=self._listen_udp, daemon=True)
+        self._udp_thread.start()
+        self._tcp_thread = threading.Thread(target=self._listen_tcp, daemon=True)
+        self._tcp_thread.start()
+
+    def stop(self):
+        self.running = False
+
+    def _listen_udp(self):
+        """监听UDP指令"""
+        while self.running:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.settimeout(3)
+                sock.bind(('0.0.0.0', self.udp_port))
+                print(f'[中控] UDP监听启动，端口: {self.udp_port}')
+                while self.running:
+                    try:
+                        data, addr = sock.recvfrom(1024)
+                        cmd = data.decode('utf-8').strip()
+                        print(f'[中控] UDP收到: {cmd} 来自 {addr}')
+                        if cmd and self.on_command:
+                            self.on_command(cmd, 'udp')
+                    except socket.timeout:
+                        continue
+                    except:
+                        pass
+            except Exception as e:
+                print(f'[中控] UDP监听异常: {e}')
+                time.sleep(3)
+
+    def _listen_tcp(self):
+        """监听TCP指令"""
+        while self.running:
+            try:
+                server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.settimeout(3)
+                server.bind(('0.0.0.0', self.tcp_port))
+                server.listen(5)
+                print(f'[中控] TCP监听启动，端口: {self.tcp_port}')
+                while self.running:
+                    try:
+                        client, addr = server.accept()
+                        client.settimeout(5)
+                        data = client.recv(1024)
+                        cmd = data.decode('utf-8').strip()
+                        print(f'[中控] TCP收到: {cmd} 来自 {addr}')
+                        if cmd and self.on_command:
+                            self.on_command(cmd, 'tcp')
+                            # 返回确认
+                            client.send(b'OK')
+                        client.close()
+                    except socket.timeout:
+                        continue
+                    except:
+                        pass
+            except Exception as e:
+                print(f'[中控] TCP监听异常: {e}')
+                time.sleep(3)
+
+
 # ===== UDP自动发现服务器 =====
 BROADCAST_PORT = 15080
 
@@ -536,9 +615,10 @@ class TerminalApp:
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
 
-        self.http_client = HTTPClient(on_command=self._on_command)
+        self.http_client = HTTPClient(on_command=self._on_http_command)
         self.command_handler = CommandHandler(self)
         self.server_discovery = ServerDiscovery(on_found=self._on_server_found)
+        self.control_listener = ControlListener(on_command=self._on_control_command)
 
         self._build_ui()
         self._load_config_to_ui()
@@ -548,11 +628,27 @@ class TerminalApp:
         if saved_ip:
             self.http_client.configure(saved_ip, self.config.get('server_port', 8080))
         self.http_client.start()
+        # 启动中控UDP/TCP监听
+        self.control_listener.start(udp_port=5005, tcp_port=5006)
 
         self._refresh_status()
 
-    def _on_command(self, data):
+    def _on_http_command(self, data):
+        """HTTP轮询收到指令"""
         self.root.after(0, lambda: self.command_handler.handle(data))
+
+    def _on_control_command(self, cmd, source='udp'):
+        """中控UDP/TCP收到指令"""
+        print(f'[中控] 收到指令: {cmd} ({source})')
+        cmd_map = {
+            'shutdown': 'shutdown', 'restart': 'restart', 'cancel': 'cancel',
+            'volume:up': 'volume:up', 'volume:down': 'volume:down',
+            'mute': 'mute', 'unmute': 'unmute', 'status': 'status', 'help': 'help',
+        }
+        mapped_cmd = cmd_map.get(cmd.lower().strip(), cmd.lower().strip())
+        data = {'id': f'ctrl_{int(time.time())}', 'cmd': mapped_cmd}
+        self.root.after(0, lambda: self.command_handler.handle(data))
+        self.root.after(0, lambda: self._show_msg(f'中控指令({source}): {mapped_cmd}'))
 
     def _on_server_found(self, ip, port):
         print(f'[自动发现] 服务器 {ip}:{port}')
@@ -611,7 +707,12 @@ class TerminalApp:
         step_frame.pack(pady=(0, 5))
         tk.Label(step_frame, text='步长：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.var_step = tk.IntVar(value=10)
-        tk.Spinbox(step_frame, from_=1, to=50, textvariable=self.var_step, width=5).pack(side='left', padx=3)
+        self.step_spin = tk.Spinbox(step_frame, from_=1, to=50, textvariable=self.var_step, width=5,
+                command=self._save_step)
+        self.step_spin.pack(side='left', padx=3)
+        # 点击其他地方时自动保存并移走光标
+        self.step_spin.bind('<FocusOut>', lambda e: self._save_step())
+        self.step_spin.bind('<Return>', lambda e: self.root.focus_set())
         tk.Label(step_frame, text='%').pack(side='left')
         tk.Button(step_frame, text='保存', command=self._save_step).pack(side='left', padx=8)
 
@@ -886,19 +987,22 @@ class TerminalApp:
 
     def _refresh_status(self):
         self._update_volume_display()
+        status_parts = []
         if self.http_client.connected:
-            self.lbl_network.config(text=f'通讯：已连接 {self.http_client.server_ip}:{self.http_client.server_port}', fg='#27ae60')
+            status_parts.append(f'服务器:已连接')
+        elif self.var_server_ip.get():
+            status_parts.append(f'服务器:连接中...')
         else:
-            ip = self.var_server_ip.get()
-            if ip:
-                self.lbl_network.config(text=f'通讯：正在连接 {ip}...', fg='#f39c12')
-            else:
-                self.lbl_network.config(text='通讯：搜索服务器中...', fg='#e74c3c')
+            status_parts.append('服务器:搜索中')
+        status_parts.append(f'UDP:{5005} TCP:{5006}')
+        self.lbl_network.config(text='通讯：' + ' | '.join(status_parts),
+                               fg='#27ae60' if self.http_client.connected else '#f39c12')
         self.root.after(3000, self._refresh_status)
 
     def _quit(self):
         self.http_client.stop()
         self.server_discovery.stop()
+        self.control_listener.stop()
         self.root.destroy()
 
     def run(self):

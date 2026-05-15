@@ -53,22 +53,8 @@ def save_config(cfg):
 
 
 # ===== 音量控制 =====
-class _GUID(ctypes.Structure):
-    """COM GUID结构体"""
-    _fields_ = [
-        ('Data1', ctypes.c_ulong),
-        ('Data2', ctypes.c_ushort),
-        ('Data3', ctypes.c_ushort),
-        ('Data4', ctypes.c_ubyte * 8),
-    ]
-
-# Core Audio GUID常量
-_CLSID_MMDeviceEnumerator = _GUID(0xBCDE0395, 0xE52F, 0x467C, (0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E))
-_IID_IMMDeviceEnumerator = _GUID(0xA95664D2, 0x9614, 0x4F35, (0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6))
-_IID_IAudioEndpointVolume = _GUID(0x5CDF2C82, 0x841E, 0x4546, (0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A))
-
 class VolumeControl:
-    """Windows音量控制 - 纯Python ctypes直接调Core Audio API"""
+    """Windows音量控制 - PowerShell + C# Core Audio"""
     VK_VOLUME_MUTE = 0xAD
     VK_VOLUME_UP = 0xAF
     VK_VOLUME_DOWN = 0xAE
@@ -78,160 +64,97 @@ class VolumeControl:
     _bg_thread = None
     _bg_running = False
     _app_ref = None
-    _com_ok = False
-    _endpoint = None  # IAudioEndpointVolume COM接口指针(c_void_p实例)
-    _vtable = None    # vtable指针数组
+    _ps = None       # PowerShell进程
+    _ps_ok = False   # PowerShell是否可用
+    _lock = threading.Lock()
+
+    # C#代码 - Core Audio API访问
+    _CS = r'''
+using System;using System.Runtime.InteropServices;
+public class V{
+ [ComImport,GUID("BCDE0395-E52F-467C-8E3D-C4579291692E")]class E{}
+ [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IE{void X1();void G(int a,int b,out object d);}
+ [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface ID{void A(ref Guid i,int c,IntPtr p,out object v);}
+ [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IV{
+  int X0(IntPtr a);int X1(IntPtr a);int X2(out uint c);
+  int X3(float a,ref Guid b);int X4(float a,ref Guid b);int X5(out float a);int X6(out float a);
+  int X7(uint a,float b,ref Guid c);int X8(uint a,float b,ref Guid c);int X9(uint a,out float b);int X10(uint a,out float b);
+  int X11(int a,ref Guid b);int X12(out int a);
+  int X13(out uint a,out uint b);int X14(ref Guid a);int X15(ref Guid a);int X16(out uint a);int X17(out float a,out float b,out float c);
+ }
+ static IV GetV(){var e=(IE)new E();object d;e.G(0,0,out d);var dev=(ID)d;var iid=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");object v;dev.A(ref iid,0,IntPtr.Zero,out v);return(IV)v;}
+ public static string Read(){try{var v=GetV();float f;v.X6(out f);int m;v.X12(out m);return((int)Math.Round(f*100))+","+m;}catch(Exception ex){return"ERR:"+ex.Message;}}
+ public static string SetVol(int val){try{var v=GetV();float f=val/100f;Guid g=Guid.Empty;v.X4(f,ref g);return"OK";}catch(Exception ex){return"ERR:"+ex.Message;}}
+ public static string SetMute(int m){try{var v=GetV();Guid g=Guid.Empty;v.X11(m,ref g);return"OK";}catch(Exception ex){return"ERR:"+ex.Message;}}
+}
+'''
 
     @staticmethod
-    def _init_com():
-        """初始化COM，获取IAudioEndpointVolume接口"""
+    def _start_ps():
+        """启动PowerShell进程并编译C#代码"""
         try:
-            ole32 = ctypes.windll.ole32
-
-            # ★关键：显式设置函数签名，否则参数传递可能出错★
-            ole32.CoInitialize.argtypes = [ctypes.c_void_p]
-            ole32.CoInitialize.restype = ctypes.c_long
-
-            ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-            ole32.CoInitializeEx.restype = ctypes.c_long
-
-            ole32.CoCreateInstance.argtypes = [
-                ctypes.POINTER(_GUID),   # rclsid
-                ctypes.c_void_p,         # pUnkOuter
-                ctypes.c_ulong,          # dwClsCtx
-                ctypes.POINTER(_GUID),   # riid
-                ctypes.POINTER(ctypes.c_void_p),  # ppv
-            ]
-            ole32.CoCreateInstance.restype = ctypes.c_long
-
-            # 初始化COM（单线程公寓模式）
-            hr = ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
-            if hr < 0:
-                print(f'[音量] COM初始化失败: 0x{hr & 0xFFFFFFFF:08X}')
-                return False
-
-            # 创建IMMDeviceEnumerator
-            enumerator = ctypes.c_void_p()
-            hr = ole32.CoCreateInstance(
-                ctypes.byref(_CLSID_MMDeviceEnumerator),
-                None,
-                1,  # CLSCTX_INPROC_SERVER
-                ctypes.byref(_IID_IMMDeviceEnumerator),
-                ctypes.byref(enumerator))
-            if hr != 0 or not enumerator.value:
-                print(f'[音量] 创建枚举器失败: 0x{hr & 0xFFFFFFFF:08X}')
-                return False
-            print(f'[音量] 枚举器创建成功: {enumerator.value:#x}')
-
-            # IMMDeviceEnumerator::GetDefaultAudioEndpoint (vtable index 4)
-            # HRESULT GetDefaultAudioEndpoint(EDataFlow, ERole, IMMDevice**)
-            vt_ptr = ctypes.cast(enumerator, ctypes.POINTER(ctypes.c_void_p))[0]
-            vt = ctypes.cast(ctypes.c_void_p(vt_ptr), ctypes.POINTER(ctypes.c_void_p))
-            func = ctypes.cast(vt[4],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)))
-            device = ctypes.c_void_p()
-            hr = func(enumerator, 0, 0, ctypes.byref(device))  # eRender=0, eConsole=0
-            # 释放枚举器 (Release vtable index 2)
-            rel = ctypes.cast(vt[2], ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p))
-            rel(enumerator)
-            if hr != 0 or not device.value:
-                print(f'[音量] 获取默认设备失败: 0x{hr & 0xFFFFFFFF:08X}')
-                return False
-            print(f'[音量] 默认设备获取成功: {device.value:#x}')
-
-            # IMMDevice::Activate (vtable index 3)
-            # HRESULT Activate(REFIID, DWORD, PROPVARIANT*, void**)
-            vt_ptr = ctypes.cast(device, ctypes.POINTER(ctypes.c_void_p))[0]
-            vt = ctypes.cast(ctypes.c_void_p(vt_ptr), ctypes.POINTER(ctypes.c_void_p))
-            func = ctypes.cast(vt[3],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_GUID), ctypes.c_uint, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)))
-            endpoint = ctypes.c_void_p()
-            hr = func(device, ctypes.byref(_IID_IAudioEndpointVolume), 0, None, ctypes.byref(endpoint))
-            # 释放设备
-            rel = ctypes.cast(vt[2], ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p))
-            rel(device)
-            if hr != 0 or not endpoint.value:
-                print(f'[音量] 激活端点失败: 0x{hr & 0xFFFFFFFF:08X}')
-                return False
-            print(f'[音量] 端点激活成功: {endpoint.value:#x}')
-
-            # 缓存endpoint和vtable
-            VolumeControl._endpoint = endpoint
-            vt_ptr = ctypes.cast(endpoint, ctypes.POINTER(ctypes.c_void_p))[0]
-            VolumeControl._vtable = ctypes.cast(ctypes.c_void_p(vt_ptr), ctypes.POINTER(ctypes.c_void_p))
-            VolumeControl._com_ok = True
-            print('[音量] ★COM初始化成功★')
-            return True
-        except Exception as e:
-            print(f'[音量] COM初始化异常: {e}')
-            import traceback
-            traceback.print_exc()
+            VolumeControl._ps = subprocess.Popen(
+                ['powershell', '-NoProfile', '-NonInteractive', '-Command', '-'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,
+            )
+            # 发送Add-Type编译命令
+            cmd = 'Add-Type -TypeDefinition @"\n' + VolumeControl._CS + '\n"@ -Language CSharp\n'
+            VolumeControl._ps.stdin.write(cmd.encode('utf-8'))
+            VolumeControl._ps.stdin.write(b'echo __INIT_OK__\n')
+            VolumeControl._ps.stdin.flush()
+            # 等待初始化完成（最多30秒）
+            for _ in range(300):
+                line = VolumeControl._ps.stdout.readline().decode('utf-8', errors='replace').strip()
+                if '__INIT_OK__' in line:
+                    VolumeControl._ps_ok = True
+                    print('[音量] PowerShell+C# 初始化成功')
+                    return True
+                if VolumeControl._ps.poll() is not None:
+                    break
+            print('[音量] PowerShell初始化失败')
             return False
+        except Exception as e:
+            print(f'[音量] PowerShell启动失败: {e}')
+            return False
+
+    @staticmethod
+    def _ps_cmd(cmd):
+        """发送命令到PowerShell并读取结果"""
+        if not VolumeControl._ps_ok or not VolumeControl._ps or VolumeControl._ps.poll() is not None:
+            VolumeControl._ps_ok = False
+            return None
+        with VolumeControl._lock:
+            try:
+                VolumeControl._ps.stdin.write((cmd + '\n').encode('utf-8'))
+                VolumeControl._ps.stdin.flush()
+                line = VolumeControl._ps.stdout.readline().decode('utf-8', errors='replace').strip()
+                return line
+            except:
+                VolumeControl._ps_ok = False
+                return None
 
     @staticmethod
     def _read_volume():
-        """读取当前音量和静音状态"""
-        if not VolumeControl._com_ok or not VolumeControl._vtable:
-            return
-        try:
-            ep = VolumeControl._endpoint
-            vt = VolumeControl._vtable
-
-            # IAudioEndpointVolume::GetMasterVolumeLevelScalar (vtable index 9)
-            # HRESULT GetMasterVolumeLevelScalar(float*)
-            func = ctypes.cast(vt[9],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_float)))
-            level = ctypes.c_float()
-            hr = func(ep, ctypes.byref(level))
-            if hr == 0:
-                VolumeControl._cached_volume = int(round(level.value * 100))
-            else:
-                print(f'[音量] 读音量失败: 0x{hr & 0xFFFFFFFF:08X}')
-
-            # IAudioEndpointVolume::GetMute (vtable index 15)
-            # HRESULT GetMute(BOOL*)
-            func = ctypes.cast(vt[15],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)))
-            m = ctypes.c_int()
-            hr = func(ep, ctypes.byref(m))
-            if hr == 0:
-                VolumeControl._cached_muted = bool(m.value)
-            else:
-                print(f'[音量] 读静音失败: 0x{hr & 0xFFFFFFFF:08X}')
-        except Exception as e:
-            print(f'[音量] 读取异常: {e}')
-
-    @staticmethod
-    def _com_set_volume(val):
-        """设置音量 (vtable index 7: SetMasterVolumeLevelScalar)"""
-        if not VolumeControl._com_ok:
-            return False
-        try:
-            func = ctypes.cast(VolumeControl._vtable[7],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_float, ctypes.POINTER(_GUID)))
-            hr = func(VolumeControl._endpoint, val / 100.0, None)
-            if hr != 0:
-                print(f'[音量] 设音量失败: 0x{hr & 0xFFFFFFFF:08X}')
-            return hr == 0
-        except Exception as e:
-            print(f'[音量] 设音量异常: {e}')
-            return False
-
-    @staticmethod
-    def _com_set_mute(mute):
-        """设置静音 (vtable index 14: SetMute)"""
-        if not VolumeControl._com_ok:
-            return False
-        try:
-            func = ctypes.cast(VolumeControl._vtable[14],
-                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(_GUID)))
-            hr = func(VolumeControl._endpoint, int(mute), None)
-            if hr != 0:
-                print(f'[音量] 设静音失败: 0x{hr & 0xFFFFFFFF:08X}')
-            return hr == 0
-        except Exception as e:
-            print(f'[音量] 设静音异常: {e}')
-            return False
+        """读取音量和静音状态"""
+        result = VolumeControl._ps_cmd('[V]::Read()')
+        if result and ',' in result and not result.startswith('ERR'):
+            try:
+                parts = result.split(',')
+                VolumeControl._cached_volume = int(parts[0])
+                VolumeControl._cached_muted = (parts[1] == '1')
+                return
+            except:
+                pass
+        # PowerShell不可用时，尝试重启
+        if not result:
+            print('[音量] PowerShell断开，尝试重启...')
+            VolumeControl._start_ps()
 
     @staticmethod
     def start_bg_monitor(app=None):
@@ -243,27 +166,33 @@ class VolumeControl:
     @staticmethod
     def stop_bg_monitor():
         VolumeControl._bg_running = False
+        if VolumeControl._ps:
+            try:
+                VolumeControl._ps.stdin.write(b'exit\n')
+                VolumeControl._ps.stdin.flush()
+                VolumeControl._ps.terminate()
+            except:
+                pass
 
     @staticmethod
     def _bg_loop():
-        """后台线程：初始化COM → 读取音量 → 通知UI → 每3秒轮询"""
-        ok = VolumeControl._init_com()
-        if ok:
+        """后台：启动PowerShell → 读取初始音量 → 通知UI → 每5秒轮询"""
+        VolumeControl._start_ps()
+        if VolumeControl._ps_ok:
             VolumeControl._read_volume()
             print(f'[音量] ★首次读取: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
-            # 立即通知UI刷新
             if VolumeControl._app_ref:
                 try:
                     VolumeControl._app_ref.root.after(0, VolumeControl._app_ref._update_volume_display)
                 except:
                     pass
         else:
-            print('[音量] COM初始化失败，使用keybd_event备用')
+            print('[音量] PowerShell不可用，使用keybd_event备用')
 
         while VolumeControl._bg_running:
-            if VolumeControl._com_ok:
+            if VolumeControl._ps_ok:
                 VolumeControl._read_volume()
-            time.sleep(3)
+            time.sleep(5)
 
     @staticmethod
     def get_volume():
@@ -272,53 +201,61 @@ class VolumeControl:
     @staticmethod
     def set_volume(val):
         val = max(0, min(100, val))
-        if VolumeControl._com_ok:
-            VolumeControl._com_set_volume(val)
-            VolumeControl._cached_volume = val
-        else:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
-            time.sleep(0.05)
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, val // 2))
-            VolumeControl._cached_volume = val
+        if VolumeControl._ps_ok:
+            result = VolumeControl._ps_cmd(f'[V]::SetVol({val})')
+            if result == 'OK':
+                VolumeControl._cached_volume = val
+                return True
+        # 备用：keybd_event
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
+        time.sleep(0.05)
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, val // 2))
+        VolumeControl._cached_volume = val
         return True
 
     @staticmethod
     def volume_up(step=10):
-        if VolumeControl._com_ok:
+        if VolumeControl._ps_ok:
             new_vol = min(100, VolumeControl._cached_volume + step)
-            VolumeControl._com_set_volume(new_vol)
-            VolumeControl._cached_volume = new_vol
-        else:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, step // 2))
-            VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
+            result = VolumeControl._ps_cmd(f'[V]::SetVol({new_vol})')
+            if result == 'OK':
+                VolumeControl._cached_volume = new_vol
+                return True
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, step // 2))
+        VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
         return True
 
     @staticmethod
     def volume_down(step=10):
-        if VolumeControl._com_ok:
+        if VolumeControl._ps_ok:
             new_vol = max(0, VolumeControl._cached_volume - step)
-            VolumeControl._com_set_volume(new_vol)
-            VolumeControl._cached_volume = new_vol
-        else:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, max(1, step // 2))
-            VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
+            result = VolumeControl._ps_cmd(f'[V]::SetVol({new_vol})')
+            if result == 'OK':
+                VolumeControl._cached_volume = new_vol
+                return True
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, max(1, step // 2))
+        VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
         return True
 
     @staticmethod
     def mute():
-        if VolumeControl._com_ok:
-            VolumeControl._com_set_mute(True)
-        else:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+        if VolumeControl._ps_ok:
+            result = VolumeControl._ps_cmd('[V]::SetMute(1)')
+            if result == 'OK':
+                VolumeControl._cached_muted = True
+                return True
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = True
         return True
 
     @staticmethod
     def unmute():
-        if VolumeControl._com_ok:
-            VolumeControl._com_set_mute(False)
-        else:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+        if VolumeControl._ps_ok:
+            result = VolumeControl._ps_cmd('[V]::SetMute(0)')
+            if result == 'OK':
+                VolumeControl._cached_muted = False
+                return True
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = False
         return True
 

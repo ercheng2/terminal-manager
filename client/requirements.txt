@@ -1,0 +1,6 @@
+pycaw
+comtypes
+websockets
+pystray
+Pillow
+psutil

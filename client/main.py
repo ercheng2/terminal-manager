@@ -54,8 +54,28 @@ def save_config(cfg):
 
 # ===== 音量控制 =====
 class VolumeControl:
+    """Windows音量控制 - 使用keybd_event模拟键盘音量键，最可靠零依赖"""
+
+    VK_VOLUME_MUTE = 0xAD
+    VK_VOLUME_UP = 0xAF
+    VK_VOLUME_DOWN = 0xAE
+
     @staticmethod
-    def _try_pycaw():
+    def _key_event(vk_code, press_count=1):
+        """模拟按键 - 最可靠的方式"""
+        try:
+            for _ in range(press_count):
+                ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)  # key down
+                ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)  # key up
+                time.sleep(0.05)
+            return True
+        except Exception as e:
+            print(f'[音量] 按键模拟失败: {e}')
+            return False
+
+    @staticmethod
+    def get_volume():
+        """获取当前音量 0-100"""
         try:
             import pythoncom
             pythoncom.CoInitialize()
@@ -64,92 +84,80 @@ class VolumeControl:
             devices = AudioUtilities.GetSpeakers()
             interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
             volume = interface.QueryInterface(IAudioEndpointVolume)
-            return volume
+            return int(round(volume.GetMasterVolumeLevelScalar() * 100))
         except:
-            return None
-
-    @staticmethod
-    def get_volume():
-        try:
-            volume = VolumeControl._try_pycaw()
-            if volume:
-                return int(round(volume.GetMasterVolumeLevelScalar() * 100))
-        except:
-            pass
-        return 0
+            return 0
 
     @staticmethod
     def set_volume(val):
+        """设置音量：先降到0再升到目标"""
         try:
-            volume = VolumeControl._try_pycaw()
-            if volume:
-                volume.SetMasterVolumeLevelScalar(val / 100.0, None)
-                return True
-        except:
-            pass
-        try:
-            subprocess.run(['powershell', '-Command',
-                f'$wshShell = New-Object -ComObject WScript.Shell; '
-                f'1..50 | ForEach-Object {{$wshShell.SendKeys([char]174)}}; '
-                f'1..{val//2} | ForEach-Object {{$wshShell.SendKeys([char]175)}}'],
-                timeout=10, capture_output=True)
+            import pythoncom
+            pythoncom.CoInitialize()
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume.SetMasterVolumeLevelScalar(val / 100.0, None)
             return True
         except:
-            return False
+            pass
+        # pycaw失败，用按键模拟
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
+        time.sleep(0.1)
+        presses = max(1, val // 2)
+        VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
+        return True
 
     @staticmethod
     def volume_up(step=10):
-        v = VolumeControl.get_volume()
-        return VolumeControl.set_volume(min(100, v + step))
+        """音量+，每次按键约2%"""
+        presses = max(1, step // 2)
+        return VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
 
     @staticmethod
     def volume_down(step=10):
-        v = VolumeControl.get_volume()
-        return VolumeControl.set_volume(max(0, v - step))
+        """音量-"""
+        presses = max(1, step // 2)
+        return VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, presses)
 
     @staticmethod
     def mute():
-        try:
-            volume = VolumeControl._try_pycaw()
-            if volume:
-                volume.SetMute(1, None)
-                return True
-        except:
-            pass
-        try:
-            subprocess.run(['powershell', '-Command',
-                '$wshShell = New-Object -ComObject WScript.Shell; $wshShell.SendKeys([char]173)'],
-                timeout=5, capture_output=True)
-            return True
-        except:
-            return False
+        """静音"""
+        return VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
 
     @staticmethod
     def unmute():
+        """取消静音（静音键是toggle，如果已静音就按一次取消）"""
         try:
-            volume = VolumeControl._try_pycaw()
-            if volume:
-                volume.SetMute(0, None)
-                return True
-        except:
-            pass
-        try:
-            subprocess.run(['powershell', '-Command',
-                '$wshShell = New-Object -ComObject WScript.Shell; $wshShell.SendKeys([char]173)'],
-                timeout=5, capture_output=True)
+            import pythoncom
+            pythoncom.CoInitialize()
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            if volume.GetMute() == 1:
+                VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
             return True
         except:
-            return False
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+            return True
 
     @staticmethod
     def is_muted():
         try:
-            volume = VolumeControl._try_pycaw()
-            if volume:
-                return volume.GetMute() == 1
+            import pythoncom
+            pythoncom.CoInitialize()
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            return volume.GetMute() == 1
         except:
-            pass
-        return False
+            return False
 
 
 # ===== 电源控制 =====

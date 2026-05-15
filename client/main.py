@@ -52,76 +52,89 @@ def save_config(cfg):
 
 # ===== 音量控制 (Windows) =====
 class VolumeControl:
-    """Windows音量控制，基于pycaw"""
+    """Windows音量控制，基于pycaw，多重fallback"""
+
+    @staticmethod
+    def _get_interface():
+        """获取音频接口"""
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = interface.QueryInterface(IAudioEndpointVolume)
+        return volume
 
     @staticmethod
     def get_volume():
         """获取当前音量 0-100"""
         try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume = VolumeControl._get_interface()
             return int(round(volume.GetMasterVolumeLevelScalar() * 100))
-        except:
-            return 0
+        except Exception as e:
+            print(f'[音量] 获取失败: {e}')
+            return -1
 
     @staticmethod
     def set_volume(val):
         """设置音量 0-100"""
         try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume = VolumeControl._get_interface()
             volume.SetMasterVolumeLevelScalar(val / 100.0, None)
-        except:
-            pass
+            print(f'[音量] 设置为 {val}%')
+            return True
+        except Exception as e:
+            print(f'[音量] 设置失败: {e}')
+            # fallback: 用nircmd或powershell
+            try:
+                subprocess.run(['powershell', '-Command',
+                    f'$wshShell = New-Object -ComObject WScript.Shell; 1..{val//2} | % {{$wshShell.SendKeys([char]174)}}'],
+                    timeout=5, capture_output=True)
+                return True
+            except:
+                return False
 
     @staticmethod
     def volume_up(step=10):
         v = VolumeControl.get_volume()
-        VolumeControl.set_volume(min(100, v + step))
+        if v >= 0:
+            VolumeControl.set_volume(min(100, v + step))
+            return True
+        return False
 
     @staticmethod
     def volume_down(step=10):
         v = VolumeControl.get_volume()
-        VolumeControl.set_volume(max(0, v - step))
+        if v >= 0:
+            VolumeControl.set_volume(max(0, v - step))
+            return True
+        return False
 
     @staticmethod
     def mute():
         try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume = VolumeControl._get_interface()
             volume.SetMute(1, None)
-        except:
-            pass
+            print('[音量] 已静音')
+            return True
+        except Exception as e:
+            print(f'[音量] 静音失败: {e}')
+            return False
 
     @staticmethod
     def unmute():
         try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume = VolumeControl._get_interface()
             volume.SetMute(0, None)
-        except:
-            pass
+            print('[音量] 已取消静音')
+            return True
+        except Exception as e:
+            print(f'[音量] 取消静音失败: {e}')
+            return False
 
     @staticmethod
     def is_muted():
         try:
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume = VolumeControl._get_interface()
             return volume.GetMute() == 1
         except:
             return False
@@ -131,46 +144,77 @@ class VolumeControl:
 class PowerControl:
     @staticmethod
     def shutdown():
-        if platform.system() == 'Windows':
-            os.system('shutdown /s /t 0')
-        else:
-            os.system('shutdown -h now')
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['shutdown', '/s', '/t', '0'], capture_output=True, timeout=10)
+            else:
+                subprocess.run(['shutdown', '-h', 'now'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 关机失败: {e}')
+            return False
 
     @staticmethod
     def restart():
-        if platform.system() == 'Windows':
-            os.system('shutdown /r /t 0')
-        else:
-            os.system('reboot')
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['shutdown', '/r', '/t', '0'], capture_output=True, timeout=10)
+            else:
+                subprocess.run(['reboot'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 重启失败: {e}')
+            return False
 
     @staticmethod
     def cancel_shutdown():
-        if platform.system() == 'Windows':
-            os.system('shutdown /a')
-        else:
-            os.system('shutdown -c')
+        try:
+            if platform.system() == 'Windows':
+                r = subprocess.run(['shutdown', '/a'], capture_output=True, text=True, timeout=10)
+                print(f'[电源] 取消关机: {r.stdout} {r.stderr}')
+            else:
+                subprocess.run(['shutdown', '-c'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 取消关机失败: {e}')
+            return False
 
     @staticmethod
     def lock_screen():
-        if platform.system() == 'Windows':
-            ctypes.windll.user32.LockWorkStation()
-        else:
-            os.system('loginctl lock-session')
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['rundll32.exe', 'user32.dll,LockWorkStation'], capture_output=True, timeout=10)
+            else:
+                subprocess.run(['loginctl', 'lock-session'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 锁屏失败: {e}')
+            return False
 
     @staticmethod
     def logout():
-        if platform.system() == 'Windows':
-            os.system('shutdown /l')
-        else:
-            os.system('loginctl terminate-session $XDG_SESSION_ID')
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['shutdown', '/l'], capture_output=True, timeout=10)
+            else:
+                subprocess.run(['loginctl', 'terminate-session'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 注销失败: {e}')
+            return False
 
     @staticmethod
     def timed_shutdown(seconds):
-        if platform.system() == 'Windows':
-            os.system(f'shutdown /s /t {seconds}')
-        else:
-            minutes = seconds // 60
-            os.system(f'shutdown -h +{minutes}')
+        try:
+            if platform.system() == 'Windows':
+                subprocess.run(['shutdown', '/s', '/t', str(seconds)], capture_output=True, timeout=10)
+            else:
+                minutes = max(1, seconds // 60)
+                subprocess.run(['shutdown', '-h', f'+{minutes}'], capture_output=True, timeout=10)
+            return True
+        except Exception as e:
+            print(f'[电源] 定时关机失败: {e}')
+            return False
 
     @staticmethod
     def run_script(script_content, script_type='bat'):
@@ -348,43 +392,64 @@ class CommandHandler:
         cmd = data.get('cmd', '')
         task_id = data.get('task_id', '')
         result = {'status': 'failed', 'msg': '未知指令'}
+        print(f'[指令] 收到指令: {cmd}, task_id: {task_id}')
 
         # 电源指令
         if cmd == 'shutdown':
-            PowerControl.shutdown()
-            result = {'status': 'success', 'msg': '关机指令已执行'}
+            if PowerControl.shutdown():
+                result = {'status': 'success', 'msg': '关机指令已执行'}
+            else:
+                result = {'status': 'failed', 'msg': '关机指令执行失败'}
         elif cmd == 'restart':
-            PowerControl.restart()
-            result = {'status': 'success', 'msg': '重启指令已执行'}
+            if PowerControl.restart():
+                result = {'status': 'success', 'msg': '重启指令已执行'}
+            else:
+                result = {'status': 'failed', 'msg': '重启指令执行失败'}
         elif cmd == 'cancel':
-            PowerControl.cancel_shutdown()
-            result = {'status': 'success', 'msg': '已取消关机'}
+            if PowerControl.cancel_shutdown():
+                result = {'status': 'success', 'msg': '已取消关机'}
+            else:
+                result = {'status': 'failed', 'msg': '取消关机失败'}
         elif cmd == 'lock':
-            PowerControl.lock_screen()
-            result = {'status': 'success', 'msg': '已锁屏'}
+            if PowerControl.lock_screen():
+                result = {'status': 'success', 'msg': '已锁屏'}
+            else:
+                result = {'status': 'failed', 'msg': '锁屏失败'}
         elif cmd == 'logout':
-            PowerControl.logout()
-            result = {'status': 'success', 'msg': '已注销'}
+            if PowerControl.logout():
+                result = {'status': 'success', 'msg': '已注销'}
+            else:
+                result = {'status': 'failed', 'msg': '注销失败'}
         elif cmd == 'timed_shutdown':
             seconds = data.get('seconds', 60)
-            PowerControl.timed_shutdown(seconds)
-            result = {'status': 'success', 'msg': f'{seconds}秒后关机'}
+            if PowerControl.timed_shutdown(seconds):
+                result = {'status': 'success', 'msg': f'{seconds}秒后关机'}
+            else:
+                result = {'status': 'failed', 'msg': '定时关机失败'}
 
         # 音量指令
         elif cmd == 'volume:up':
             step = self.app.config.get('volume_step', 10)
-            VolumeControl.volume_up(step)
-            result = {'status': 'success', 'msg': f'音量+{step}%'}
+            if VolumeControl.volume_up(step):
+                result = {'status': 'success', 'msg': f'音量+{step}%'}
+            else:
+                result = {'status': 'failed', 'msg': '音量控制失败'}
         elif cmd == 'volume:down':
             step = self.app.config.get('volume_step', 10)
-            VolumeControl.volume_down(step)
-            result = {'status': 'success', 'msg': f'音量-{step}%'}
+            if VolumeControl.volume_down(step):
+                result = {'status': 'success', 'msg': f'音量-{step}%'}
+            else:
+                result = {'status': 'failed', 'msg': '音量控制失败'}
         elif cmd == 'mute':
-            VolumeControl.mute()
-            result = {'status': 'success', 'msg': '已静音'}
+            if VolumeControl.mute():
+                result = {'status': 'success', 'msg': '已静音'}
+            else:
+                result = {'status': 'failed', 'msg': '静音失败'}
         elif cmd == 'unmute':
-            VolumeControl.unmute()
-            result = {'status': 'success', 'msg': '已取消静音'}
+            if VolumeControl.unmute():
+                result = {'status': 'success', 'msg': '已取消静音'}
+            else:
+                result = {'status': 'failed', 'msg': '取消静音失败'}
 
         # 状态查询
         elif cmd == 'status':
@@ -407,7 +472,10 @@ class CommandHandler:
             result = {'status': 'success' if res['success'] else 'failed', 'msg': res.get('output', '') or res.get('error', '')}
 
         # 发送结果回服务器
+        print(f'[指令] 执行结果: {result}')
         self.app.ws_client.send_result(task_id, result['status'], result['msg'])
+        # 在客户端界面也显示反馈
+        self.app.root.after(0, lambda: self.app._show_msg(f'远程指令 {cmd}: {result["msg"]}'))
         return result
 
 
@@ -637,20 +705,34 @@ class TerminalApp:
 
     # ==================== 音量操作 ====================
     def _vol_up(self):
-        VolumeControl.volume_up(self.var_step.get())
-        self._update_volume_display()
+        step = self.var_step.get()
+        if VolumeControl.volume_up(step):
+            self._update_volume_display()
+            self._show_msg(f'音量+{step}%')
+        else:
+            self._show_msg('音量控制失败')
 
     def _vol_down(self):
-        VolumeControl.volume_down(self.var_step.get())
-        self._update_volume_display()
+        step = self.var_step.get()
+        if VolumeControl.volume_down(step):
+            self._update_volume_display()
+            self._show_msg(f'音量-{step}%')
+        else:
+            self._show_msg('音量控制失败')
 
     def _mute(self):
-        VolumeControl.mute()
-        self._update_volume_display()
+        if VolumeControl.mute():
+            self._update_volume_display()
+            self._show_msg('已静音')
+        else:
+            self._show_msg('静音失败')
 
     def _unmute(self):
-        VolumeControl.unmute()
-        self._update_volume_display()
+        if VolumeControl.unmute():
+            self._update_volume_display()
+            self._show_msg('已取消静音')
+        else:
+            self._show_msg('取消静音失败')
 
     def _save_step(self):
         self.config['volume_step'] = self.var_step.get()
@@ -665,14 +747,27 @@ class TerminalApp:
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):
-            PowerControl.shutdown()
+            if PowerControl.shutdown():
+                self._show_msg('关机指令已执行')
 
     def _restart(self):
         if messagebox.askyesno('确认', '确定要重启吗？'):
-            PowerControl.restart()
+            if PowerControl.restart():
+                self._show_msg('重启指令已执行')
 
     def _cancel_shutdown(self):
-        PowerControl.cancel_shutdown()
+        if PowerControl.cancel_shutdown():
+            self._show_msg('已取消关机')
+        else:
+            self._show_msg('没有正在进行的关机任务')
+
+    # ==================== 操作反馈 ====================
+    def _show_msg(self, msg):
+        """在状态栏显示操作反馈"""
+        self.lbl_network.config(text=f'通讯：{"已连接" if self.ws_client.connected else "未连接"} | {msg}', 
+                               fg='#2c3e50')
+        # 3秒后恢复
+        self.root.after(3000, self._refresh_status)
 
     # ==================== 延时启动 ====================
     def _add_delayed_app(self):

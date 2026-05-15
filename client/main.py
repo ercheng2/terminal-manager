@@ -54,21 +54,141 @@ def save_config(cfg):
 
 # ===== 音量控制 =====
 class VolumeControl:
-    """Windows音量控制 - keybd_event控制 + PowerShell后台读音量"""
+    """Windows音量控制 - keybd_event控制 + C# VolumeHelper.exe后台读音量"""
 
     VK_VOLUME_MUTE = 0xAD
     VK_VOLUME_UP = 0xAF
     VK_VOLUME_DOWN = 0xAE
 
-    # 缓存音量值，后台线程更新
     _cached_volume = 50
     _cached_muted = False
+    _helper_exe = None
+    _helper_ready = False
     _bg_thread = None
     _bg_running = False
 
+    _CS_CODE = r'''
+using System;
+using System.Runtime.InteropServices;
+public class V{
+ [ComImport,Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+ class Enum{}
+
+ [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IEnum{
+  void X1();void X2();
+  void GetDefault(int df,int rl,out object dev);
+ }
+
+ [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IDev{
+  void Activate(ref Guid iid,int cls,IntPtr p,out object vol);
+ }
+
+ [Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+ interface IVol{
+  void X1();void X2();void X3();
+  void Set(float f,ref Guid g);
+  void Get(out float f);
+  void X6();void X7();
+  void SetMute(int m,ref Guid g);
+  void GetMute(out int m);
+ }
+
+ static IVol GetVol(){
+  var e=(IEnum)new Enum();
+  object d;e.GetDefault(0,0,out d);
+  var dev=(IDev)d;
+  var iid=new Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617");
+  object v;dev.Activate(ref iid,0,IntPtr.Zero,out v);
+  return(IVol)v;
+ }
+
+ public static void Main(string[] a){
+  if(a.Length==0)return;
+  var v=GetVol();
+  var c=a[0].ToLower();
+  if(c=="get"){float f;v.Get(out f);Console.Write((int)Math.Round(f*100));}
+  else if(c=="mute"){int m;v.GetMute(out m);Console.Write(m);}
+  else if(c=="set"&&a.Length>1){float f=float.Parse(a[1])/100f;Guid g=Guid.Empty;v.Set(f,ref g);Console.Write("OK");}
+  else if(c=="setmute"&&a.Length>1){int m=int.Parse(a[1]);Guid g=Guid.Empty;v.SetMute(m,ref g);Console.Write("OK");}
+ }
+}
+'''
+
+    @staticmethod
+    def _compile_helper():
+        """编译C#辅助程序"""
+        exe_path = os.path.join(BASE_DIR, 'VolumeHelper.exe')
+        if os.path.exists(exe_path):
+            VolumeControl._helper_exe = exe_path
+            VolumeControl._helper_ready = True
+            print(f'[音量] VolumeHelper.exe 已存在')
+            return True
+
+        cs_path = os.path.join(BASE_DIR, 'VolumeHelper.cs')
+        try:
+            with open(cs_path, 'w', encoding='utf-8') as f:
+                f.write(VolumeControl._CS_CODE)
+        except:
+            return False
+
+        windir = os.environ.get('WINDIR', r'C:\Windows')
+        csc_paths = [
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v3.5', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v3.5', 'csc.exe'),
+        ]
+        csc = None
+        for p in csc_paths:
+            if os.path.exists(p):
+                csc = p
+                break
+
+        if not csc:
+            print('[音量] 未找到csc编译器')
+            return False
+
+        try:
+            r = subprocess.run([csc, '/nologo', '/optimize', '/out:' + exe_path, cs_path],
+                             capture_output=True, text=True, timeout=15)
+            if os.path.exists(exe_path):
+                VolumeControl._helper_exe = exe_path
+                VolumeControl._helper_ready = True
+                print(f'[音量] VolumeHelper.exe 编译成功')
+                try: os.remove(cs_path)
+                except: pass
+                return True
+            else:
+                print(f'[音量] 编译失败: {r.stderr}')
+        except Exception as e:
+            print(f'[音量] 编译异常: {e}')
+        return False
+
+    @staticmethod
+    def _read_volume_helper():
+        """用VolumeHelper.exe读取音量（后台线程调用）"""
+        if not VolumeControl._helper_ready:
+            return
+        try:
+            r = subprocess.run([VolumeControl._helper_exe, 'get'],
+                             capture_output=True, text=True, timeout=3,
+                             creationflags=0x08000000)
+            VolumeControl._cached_volume = int(float(r.stdout.strip()))
+        except:
+            pass
+        try:
+            r = subprocess.run([VolumeControl._helper_exe, 'mute'],
+                             capture_output=True, text=True, timeout=3,
+                             creationflags=0x08000000)
+            VolumeControl._cached_muted = (r.stdout.strip() == '1')
+        except:
+            pass
+
     @staticmethod
     def start_bg_monitor():
-        """启动后台音量监控线程"""
+        """启动后台音量监控"""
         VolumeControl._bg_running = True
         VolumeControl._bg_thread = threading.Thread(target=VolumeControl._bg_loop, daemon=True)
         VolumeControl._bg_thread.start()
@@ -79,57 +199,35 @@ class VolumeControl:
 
     @staticmethod
     def _bg_loop():
-        """后台每5秒读一次真实音量"""
+        """后台：先编译helper，再每5秒读音量"""
+        VolumeControl._compile_helper()
+        if VolumeControl._helper_ready:
+            VolumeControl._read_volume_helper()
         while VolumeControl._bg_running:
-            VolumeControl._read_volume_ps()
+            if VolumeControl._helper_ready:
+                VolumeControl._read_volume_helper()
             time.sleep(5)
 
     @staticmethod
-    def _read_volume_ps():
-        """用PowerShell读取音量（在后台线程调用，不卡UI）"""
-        try:
-            r = subprocess.run(
-                ['powershell', '-NoProfile', '-Command',
-                 '-c "$v=New-Object -ComObject WScript.Shell;'
-                 '$dev=(New-Object -ComObject MMDeviceEnumerator.MMDeviceEnumerator).GetDefaultAudioEndpoint(0,0);'
-                 '$vol=$dev.AudioEndpointVolume;'
-                 'Write-Host ([math]::Round($vol.MasterVolumeLevelScalar*100));'
-                 'Write-Host $vol.Mute"'],
-                capture_output=True, text=True, timeout=5, creationflags=0x08000000)
-            lines = r.stdout.strip().split('\n')
-            if len(lines) >= 2:
-                VolumeControl._cached_volume = int(float(lines[0].strip()))
-                VolumeControl._cached_muted = (lines[1].strip() == 'True' or lines[1].strip() == '1')
-            elif len(lines) == 1:
-                VolumeControl._cached_volume = int(float(lines[0].strip()))
-        except:
-            pass
-
-    @staticmethod
     def get_volume():
-        """获取缓存音量，不阻塞"""
         return VolumeControl._cached_volume
 
     @staticmethod
     def set_volume(val):
-        """设置音量"""
-        # 先用keybd_event降到0再升到目标
         VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
         time.sleep(0.05)
         presses = max(1, val // 2)
         VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
         VolumeControl._cached_volume = val
-        # 后台精确读取
-        threading.Thread(target=VolumeControl._read_volume_ps, daemon=True).start()
+        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
         return True
 
     @staticmethod
     def volume_up(step=10):
         presses = max(1, step // 2)
         VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
-        # 预估值，后台会校正
         VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
-        threading.Thread(target=VolumeControl._read_volume_ps, daemon=True).start()
+        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
         return True
 
     @staticmethod
@@ -137,21 +235,21 @@ class VolumeControl:
         presses = max(1, step // 2)
         VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, presses)
         VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
-        threading.Thread(target=VolumeControl._read_volume_ps, daemon=True).start()
+        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
         return True
 
     @staticmethod
     def mute():
         VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = True
-        threading.Thread(target=VolumeControl._read_volume_ps, daemon=True).start()
+        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
         return True
 
     @staticmethod
     def unmute():
         VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = False
-        threading.Thread(target=VolumeControl._read_volume_ps, daemon=True).start()
+        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
         return True
 
     @staticmethod
@@ -160,7 +258,6 @@ class VolumeControl:
 
     @staticmethod
     def _key_event(vk_code, press_count=1):
-        """模拟按键，零延迟"""
         try:
             for _ in range(press_count):
                 ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)

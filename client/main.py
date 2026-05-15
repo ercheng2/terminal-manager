@@ -5,7 +5,7 @@
 基于HTTP轮询通信，更稳定可靠
 """
 
-import os, sys, json, time, threading, platform, subprocess, ctypes
+import os, sys, json, time, threading, platform, subprocess, ctypes, queue
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
@@ -53,142 +53,121 @@ def save_config(cfg):
 
 
 # ===== 音量控制 =====
-class VolumeControl:
-    """Windows音量控制 - keybd_event控制 + C# VolumeHelper.exe后台读音量"""
+class _COM_GUID(ctypes.Structure):
+    _fields_ = [('Data1', ctypes.c_ulong), ('Data2', ctypes.c_ushort),
+                ('Data3', ctypes.c_ushort), ('Data4', ctypes.c_ubyte * 8)]
 
+class VolumeControl:
+    """Windows音量控制 - ctypes直接调Core Audio API"""
     VK_VOLUME_MUTE = 0xAD
     VK_VOLUME_UP = 0xAF
     VK_VOLUME_DOWN = 0xAE
 
     _cached_volume = 50
     _cached_muted = False
-    _helper_exe = None
-    _helper_ready = False
     _bg_thread = None
     _bg_running = False
+    _com_ok = False
+    _endpoint = None
+    _read_event = None
+    _cmd_queue = None
 
-    _CS_CODE = r'''
-using System;
-using System.Runtime.InteropServices;
-public class V{
- [ComImport,Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
- class Enum{}
-
- [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface IEnum{
-  void X1();void X2();
-  void GetDefault(int df,int rl,out object dev);
- }
-
- [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface IDev{
-  void Activate(ref Guid iid,int cls,IntPtr p,out object vol);
- }
-
- [Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface IVol{
-  void X1();void X2();void X3();
-  void Set(float f,ref Guid g);
-  void Get(out float f);
-  void X6();void X7();
-  void SetMute(int m,ref Guid g);
-  void GetMute(out int m);
- }
-
- static IVol GetVol(){
-  var e=(IEnum)new Enum();
-  object d;e.GetDefault(0,0,out d);
-  var dev=(IDev)d;
-  var iid=new Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617");
-  object v;dev.Activate(ref iid,0,IntPtr.Zero,out v);
-  return(IVol)v;
- }
-
- public static void Main(string[] a){
-  if(a.Length==0)return;
-  var v=GetVol();
-  var c=a[0].ToLower();
-  if(c=="get"){float f;v.Get(out f);Console.Write((int)Math.Round(f*100));}
-  else if(c=="mute"){int m;v.GetMute(out m);Console.Write(m);}
-  else if(c=="set"&&a.Length>1){float f=float.Parse(a[1])/100f;Guid g=Guid.Empty;v.Set(f,ref g);Console.Write("OK");}
-  else if(c=="setmute"&&a.Length>1){int m=int.Parse(a[1]);Guid g=Guid.Empty;v.SetMute(m,ref g);Console.Write("OK");}
- }
-}
-'''
+    _CLSID = _COM_GUID(0xBCDE0395, 0xE52F, 0x467C, (0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E))
+    _IID_ENUM = _COM_GUID(0xA95664D2, 0x9614, 0x4F35, (0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6))
+    _IID_VOL = _COM_GUID(0x5CDF2C82, 0x841E, 0x4546, (0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A))
 
     @staticmethod
-    def _compile_helper():
-        """编译C#辅助程序"""
-        exe_path = os.path.join(BASE_DIR, 'VolumeHelper.exe')
-        if os.path.exists(exe_path):
-            VolumeControl._helper_exe = exe_path
-            VolumeControl._helper_ready = True
-            print(f'[音量] VolumeHelper.exe 已存在')
+    def _init_com():
+        try:
+            ole32 = ctypes.windll.ole32
+            ole32.CoInitialize(None)
+            enumerator = ctypes.c_void_p()
+            hr = ole32.CoCreateInstance(
+                ctypes.byref(VolumeControl._CLSID), None, 1,
+                ctypes.byref(VolumeControl._IID_ENUM), ctypes.byref(enumerator))
+            if hr != 0 or not enumerator.value:
+                print(f'[音量] 创建枚举器失败: {hr:#x}')
+                return False
+            vt = ctypes.cast(enumerator, ctypes.POINTER(ctypes.c_void_p))[0]
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[4],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)))
+            device = ctypes.c_void_p()
+            hr = f(enumerator, 0, 0, ctypes.byref(device))
+            r = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[2],
+                ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p))
+            r(enumerator)
+            if hr != 0 or not device.value:
+                print(f'[音量] 获取设备失败: {hr:#x}')
+                return False
+            vt = ctypes.cast(device, ctypes.POINTER(ctypes.c_void_p))[0]
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[3],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_COM_GUID), ctypes.c_uint, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)))
+            endpoint = ctypes.c_void_p()
+            hr = f(device, ctypes.byref(VolumeControl._IID_VOL), 0, None, ctypes.byref(endpoint))
+            r = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[2],
+                ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p))
+            r(device)
+            if hr != 0 or not endpoint.value:
+                print(f'[音量] 激活端点失败: {hr:#x}')
+                return False
+            VolumeControl._endpoint = endpoint
+            VolumeControl._com_ok = True
+            print('[音量] Core Audio API 初始化成功')
             return True
-
-        cs_path = os.path.join(BASE_DIR, 'VolumeHelper.cs')
-        try:
-            with open(cs_path, 'w', encoding='utf-8') as f:
-                f.write(VolumeControl._CS_CODE)
-        except:
-            return False
-
-        windir = os.environ.get('WINDIR', r'C:\Windows')
-        csc_paths = [
-            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
-            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
-            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v3.5', 'csc.exe'),
-            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v3.5', 'csc.exe'),
-        ]
-        csc = None
-        for p in csc_paths:
-            if os.path.exists(p):
-                csc = p
-                break
-
-        if not csc:
-            print('[音量] 未找到csc编译器')
-            return False
-
-        try:
-            r = subprocess.run([csc, '/nologo', '/optimize', '/out:' + exe_path, cs_path],
-                             capture_output=True, text=True, timeout=15)
-            if os.path.exists(exe_path):
-                VolumeControl._helper_exe = exe_path
-                VolumeControl._helper_ready = True
-                print(f'[音量] VolumeHelper.exe 编译成功')
-                try: os.remove(cs_path)
-                except: pass
-                return True
-            else:
-                print(f'[音量] 编译失败: {r.stderr}')
         except Exception as e:
-            print(f'[音量] 编译异常: {e}')
-        return False
+            print(f'[音量] COM初始化异常: {e}')
+            return False
 
     @staticmethod
-    def _read_volume_helper():
-        """用VolumeHelper.exe读取音量（后台线程调用）"""
-        if not VolumeControl._helper_ready:
+    def _read_volume():
+        if not VolumeControl._com_ok or not VolumeControl._endpoint:
             return
         try:
-            r = subprocess.run([VolumeControl._helper_exe, 'get'],
-                             capture_output=True, text=True, timeout=3,
-                             creationflags=0x08000000)
-            VolumeControl._cached_volume = int(float(r.stdout.strip()))
+            ep = VolumeControl._endpoint
+            vt = ctypes.cast(ep, ctypes.POINTER(ctypes.c_void_p))[0]
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[9],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_float)))
+            level = ctypes.c_float()
+            if f(ep, ctypes.byref(level)) == 0:
+                VolumeControl._cached_volume = int(round(level.value * 100))
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[15],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)))
+            m = ctypes.c_int()
+            if f(ep, ctypes.byref(m)) == 0:
+                VolumeControl._cached_muted = bool(m.value)
         except:
             pass
+
+    @staticmethod
+    def _com_set_volume(val):
+        if not VolumeControl._com_ok or not VolumeControl._endpoint:
+            return False
         try:
-            r = subprocess.run([VolumeControl._helper_exe, 'mute'],
-                             capture_output=True, text=True, timeout=3,
-                             creationflags=0x08000000)
-            VolumeControl._cached_muted = (r.stdout.strip() == '1')
+            ep = VolumeControl._endpoint
+            vt = ctypes.cast(ep, ctypes.POINTER(ctypes.c_void_p))[0]
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[7],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_float, ctypes.POINTER(_COM_GUID)))
+            return f(ep, val / 100.0, None) == 0
         except:
-            pass
+            return False
+
+    @staticmethod
+    def _com_set_mute(mute):
+        if not VolumeControl._com_ok or not VolumeControl._endpoint:
+            return False
+        try:
+            ep = VolumeControl._endpoint
+            vt = ctypes.cast(ep, ctypes.POINTER(ctypes.c_void_p))[0]
+            f = ctypes.cast(ctypes.cast(vt, ctypes.POINTER(ctypes.c_void_p))[14],
+                ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(_COM_GUID)))
+            return f(ep, int(mute), None) == 0
+        except:
+            return False
 
     @staticmethod
     def start_bg_monitor():
-        """启动后台音量监控"""
+        VolumeControl._read_event = threading.Event()
+        VolumeControl._cmd_queue = queue.Queue()
         VolumeControl._bg_running = True
         VolumeControl._bg_thread = threading.Thread(target=VolumeControl._bg_loop, daemon=True)
         VolumeControl._bg_thread.start()
@@ -196,17 +175,44 @@ public class V{
     @staticmethod
     def stop_bg_monitor():
         VolumeControl._bg_running = False
+        if VolumeControl._read_event:
+            VolumeControl._read_event.set()
 
     @staticmethod
     def _bg_loop():
-        """后台：先编译helper，再每5秒读音量"""
-        VolumeControl._compile_helper()
-        if VolumeControl._helper_ready:
-            VolumeControl._read_volume_helper()
+        VolumeControl._init_com()
+        if VolumeControl._com_ok:
+            VolumeControl._read_volume()
+            print(f'[音量] 初始: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
         while VolumeControl._bg_running:
-            if VolumeControl._helper_ready:
-                VolumeControl._read_volume_helper()
-            time.sleep(5)
+            while not VolumeControl._cmd_queue.empty():
+                try:
+                    cmd = VolumeControl._cmd_queue.get_nowait()
+                    if VolumeControl._com_ok:
+                        op = cmd[0]
+                        if op == 'set':
+                            VolumeControl._com_set_volume(cmd[1])
+                        elif op == 'up':
+                            new_vol = min(100, VolumeControl._cached_volume + cmd[1])
+                            VolumeControl._com_set_volume(new_vol)
+                        elif op == 'down':
+                            new_vol = max(0, VolumeControl._cached_volume - cmd[1])
+                            VolumeControl._com_set_volume(new_vol)
+                        elif op == 'mute':
+                            VolumeControl._com_set_mute(True)
+                        elif op == 'unmute':
+                            VolumeControl._com_set_mute(False)
+                except:
+                    pass
+            if VolumeControl._com_ok:
+                VolumeControl._read_volume()
+            VolumeControl._read_event.wait(timeout=3)
+            VolumeControl._read_event.clear()
+
+    @staticmethod
+    def _trigger_read():
+        if VolumeControl._read_event:
+            VolumeControl._read_event.set()
 
     @staticmethod
     def get_volume():
@@ -214,42 +220,58 @@ public class V{
 
     @staticmethod
     def set_volume(val):
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
-        time.sleep(0.05)
-        presses = max(1, val // 2)
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
-        VolumeControl._cached_volume = val
-        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
+        val = max(0, min(100, val))
+        if VolumeControl._com_ok:
+            VolumeControl._cmd_queue.put(('set', val))
+            VolumeControl._cached_volume = val
+        else:
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
+            time.sleep(0.05)
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, val // 2))
+            VolumeControl._cached_volume = val
+        VolumeControl._trigger_read()
         return True
 
     @staticmethod
     def volume_up(step=10):
-        presses = max(1, step // 2)
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
-        VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
-        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
+        if VolumeControl._com_ok:
+            VolumeControl._cmd_queue.put(('up', step))
+            VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
+        else:
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, step // 2))
+            VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
+        VolumeControl._trigger_read()
         return True
 
     @staticmethod
     def volume_down(step=10):
-        presses = max(1, step // 2)
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, presses)
-        VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
-        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
+        if VolumeControl._com_ok:
+            VolumeControl._cmd_queue.put(('down', step))
+            VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
+        else:
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, max(1, step // 2))
+            VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
+        VolumeControl._trigger_read()
         return True
 
     @staticmethod
     def mute():
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+        if VolumeControl._com_ok:
+            VolumeControl._cmd_queue.put(('mute',))
+        else:
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = True
-        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
+        VolumeControl._trigger_read()
         return True
 
     @staticmethod
     def unmute():
-        VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+        if VolumeControl._com_ok:
+            VolumeControl._cmd_queue.put(('unmute',))
+        else:
+            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = False
-        threading.Thread(target=VolumeControl._read_volume_helper, daemon=True).start()
+        VolumeControl._trigger_read()
         return True
 
     @staticmethod

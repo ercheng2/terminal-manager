@@ -1,0 +1,38 @@
+name: Build Terminal Manager
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'client/**'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd client
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build exe
+        run: |
+          cd client
+          pyinstaller --name "坤展成终端管理" --onefile --hidden-import pycaw --hidden-import comtypes --hidden-import websockets --hidden-import pystray --hidden-import PIL --hidden-import psutil --clean main.py
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v1.0-${{ github.run_number }}
+          files: client/dist/坤展成终端管理.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

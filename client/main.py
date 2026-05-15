@@ -265,6 +265,7 @@ class WSClient:
         self.on_command = on_command  # 回调：收到指令时调用
         self.reconnect_interval = 5
         self._thread = None
+        self._loop = None  # 保存asyncio事件循环
 
     def configure(self, ip, port):
         self.server_ip = ip
@@ -277,16 +278,11 @@ class WSClient:
 
     def stop(self):
         self.running = False
-        if self.ws:
-            try:
-                import asyncio
-                asyncio.get_event_loop().run_until_complete(self.ws.close())
-            except:
-                pass
+        if self.ws and self._loop:
+            asyncio.run_coroutine_threadsafe(self.ws.close(), self._loop)
 
     def _run_loop(self):
         """自动重连循环"""
-        import asyncio
         while self.running:
             try:
                 asyncio.run(self._connect_and_listen())
@@ -302,6 +298,7 @@ class WSClient:
         try:
             async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
                 self.ws = ws
+                self._loop = asyncio.get_event_loop()
                 self.connected = True
                 # 发送注册信息
                 info = SystemInfo.get_info()
@@ -326,18 +323,16 @@ class WSClient:
             self.connected = False
 
     def send_result(self, task_id, status, msg=''):
-        """发送指令执行结果"""
-        if self.ws and self.connected:
-            import asyncio
+        """发送指令执行结果（线程安全）"""
+        if self.ws and self._loop and self.connected:
             try:
-                asyncio.get_event_loop().run_until_complete(
-                    self.ws.send(json.dumps({
-                        'type': 'result',
-                        'task_id': task_id,
-                        'status': status,
-                        'msg': msg,
-                    }))
-                )
+                data = json.dumps({
+                    'type': 'result',
+                    'task_id': task_id,
+                    'status': status,
+                    'msg': msg,
+                })
+                asyncio.run_coroutine_threadsafe(self.ws.send(data), self._loop)
             except:
                 pass
 

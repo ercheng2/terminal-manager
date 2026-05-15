@@ -39,18 +39,24 @@ class ConnectionManager:
         self.active_connections = {}  # hostname -> websocket
         self.device_info = {}         # hostname -> device info
 
-    async def connect(self, websocket, hostname):
+    async def connect(self, websocket, hostname, reg_info=None):
         self.active_connections[hostname] = websocket
+        # 保存设备信息
+        if reg_info:
+            self.device_info[hostname] = reg_info
         # 更新设备状态
         data = load_devices()
         if hostname in data['devices']:
             data['devices'][hostname]['status'] = 'online'
             data['devices'][hostname]['last_seen'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if reg_info:
+                data['devices'][hostname]['info'] = reg_info
         else:
             data['devices'][hostname] = {
                 'status': 'online',
                 'first_seen': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'last_seen': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'info': reg_info or {},
             }
         save_devices(data)
 
@@ -153,10 +159,19 @@ async def ws_client(websocket: WebSocket):
         # 第一条消息是注册信息
         msg = await asyncio.wait_for(websocket.receive_text(), timeout=30)
         data = json.loads(msg)
+        reg_info = {}
         if data.get('type') == 'register':
             hostname = data.get('hostname', 'unknown')
-            manager.device_info[hostname] = data
-            await manager.connect(websocket, hostname)
+            reg_info = {
+                'hostname': data.get('hostname', ''),
+                'os': data.get('os', ''),
+                'os_version': data.get('os_version', ''),
+                'ip': data.get('ip', ''),
+                'mac': data.get('mac', ''),
+                'arch': data.get('arch', ''),
+            }
+            manager.device_info[hostname] = reg_info
+            await manager.connect(websocket, hostname, reg_info)
 
         # 持续监听
         while True:

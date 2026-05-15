@@ -362,12 +362,52 @@ setInterval(refresh, 10000);
 </body>
 </html>'''
 
+# ===== UDP广播：让客户端自动发现服务器 =====
+import socket, threading
+
+BROADCAST_PORT = 15080  # UDP广播端口
+
+def _get_local_ip():
+    """获取本机局域网IP"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return '127.0.0.1'
+
+def _broadcast_server():
+    """每3秒向局域网广播服务器信息"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    local_ip = _get_local_ip()
+    msg = json.dumps({
+        'type': 'kzc_server',
+        'ip': local_ip,
+        'port': 8080,
+    }).encode('utf-8')
+    while True:
+        try:
+            sock.sendto(msg, ('<broadcast>', BROADCAST_PORT))
+            # 也发到255.255.255.255
+            sock.sendto(msg, ('255.255.255.255', BROADCAST_PORT))
+        except:
+            pass
+        time.sleep(3)
+
 # ===== 启动 =====
 if __name__ == '__main__':
     import uvicorn
+    local_ip = _get_local_ip()
     print('=' * 50)
     print('  坤展成终端管理系统 — 服务器端')
-    print('  管理界面: http://127.0.0.1:8080')
-    print('  局域网访问: http://本机IP:8080')
+    print(f'  管理界面: http://{local_ip}:8080')
+    print(f'  UDP广播端口: {BROADCAST_PORT}')
+    print('  客户端将自动发现并连接本服务器')
     print('=' * 50)
+    # 启动UDP广播线程
+    t = threading.Thread(target=_broadcast_server, daemon=True)
+    t.start()
     uvicorn.run(app, host='0.0.0.0', port=8080)

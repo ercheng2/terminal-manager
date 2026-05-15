@@ -296,12 +296,65 @@ class SystemInfo:
             return ''
 
 
+# ===== UDP自动发现服务器 =====
+import socket
+
+BROADCAST_PORT = 15080
+
+class ServerDiscovery:
+    """监听UDP广播，自动发现服务器"""
+
+    def __init__(self, on_found=None):
+        self.on_found = on_found  # 回调：发现服务器时调用 (ip, port)
+        self.running = False
+        self._thread = None
+        self.server_ip = None
+        self.server_port = None
+
+    def start(self):
+        self.running = True
+        self._thread = threading.Thread(target=self._listen, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running = False
+
+    def _listen(self):
+        """监听UDP广播"""
+        while self.running:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.settimeout(5)
+                sock.bind(('', BROADCAST_PORT))
+                while self.running:
+                    try:
+                        data, addr = sock.recvfrom(1024)
+                        msg = json.loads(data.decode('utf-8'))
+                        if msg.get('type') == 'kzc_server':
+                            ip = msg.get('ip', '')
+                            port = msg.get('port', 8080)
+                            if ip and ip != self.server_ip or port != self.server_port:
+                                self.server_ip = ip
+                                self.server_port = port
+                                print(f'[发现] 服务器: {ip}:{port}')
+                                if self.on_found:
+                                    self.on_found(ip, port)
+                    except socket.timeout:
+                        continue
+                    except:
+                        pass
+            except Exception as e:
+                print(f'[发现] 监听失败: {e}')
+                time.sleep(3)
+
+
 # ===== WebSocket客户端 =====
 class WSClient:
     """与服务器通信的WebSocket客户端"""
 
     def __init__(self, on_command=None):
-        self.server_ip = '127.0.0.1'
+        self.server_ip = ''
         self.server_port = 8080
         self.ws = None
         self.connected = False
@@ -338,6 +391,8 @@ class WSClient:
 
     async def _connect_and_listen(self):
         import websockets
+        if not self.server_ip:
+            return  # 还没发现服务器，等下一轮
         url = f'ws://{self.server_ip}:{self.server_port}/ws/client'
         try:
             async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
@@ -493,12 +548,20 @@ class TerminalApp:
         self.ws_client = WSClient(on_command=self._on_command)
         self.command_handler = CommandHandler(self)
 
+        # 初始化服务器自动发现
+        self.server_discovery = ServerDiscovery(on_found=self._on_server_found)
+
         # 构建界面
         self._build_ui()
         self._load_config_to_ui()
 
-        # 启动连接
-        self._connect_server()
+        # 启动自动发现 + 连接
+        self.server_discovery.start()
+        # 如果之前保存了服务器IP，直接连
+        saved_ip = self.config.get('server_ip', '')
+        if saved_ip and saved_ip != '0.0.0.0':
+            self.ws_client.configure(saved_ip, self.config.get('server_port', 8080))
+        self.ws_client.start()
 
         # 定时刷新状态
         self._refresh_status()
@@ -512,11 +575,33 @@ class TerminalApp:
         # 在主线程执行
         self.root.after(0, lambda: self.command_handler.handle(data))
 
+    def _on_server_found(self, ip, port):
+        """自动发现服务器回调"""
+        print(f'[自动发现] 服务器 {ip}:{port}')
+        # 更新UI上的IP和端口
+        self.root.after(0, lambda: self._update_server_info(ip, port))
+        # 如果当前没连接或连的不是这个服务器，重新连
+        if not self.ws_client.connected or self.ws_client.server_ip != ip:
+            self.ws_client.configure(ip, port)
+            # 自动保存服务器信息
+            self.config['server_ip'] = ip
+            self.config['server_port'] = port
+            save_config(self.config)
+            # 如果ws_client还没启动就启动它
+            if not self.ws_client.running:
+                self.ws_client.start()
+
+    def _update_server_info(self, ip, port):
+        """更新界面上的服务器信息"""
+        self.var_server_ip.set(ip)
+        self.var_server_port.set(port)
+        self._show_msg(f'自动发现服务器 {ip}:{port}')
+
     def _connect_server(self):
-        ip = self.config.get('server_ip', '127.0.0.1')
+        ip = self.config.get('server_ip', '')
         port = self.config.get('server_port', 8080)
-        self.ws_client.configure(ip, port)
-        self.ws_client.start()
+        if ip:
+            self.ws_client.configure(ip, port)
 
     # ==================== UI构建 ====================
     def _build_ui(self):
@@ -609,19 +694,22 @@ class TerminalApp:
         right_frame.pack(side='right', fill='both', expand=True, padx=(4, 0))
 
         # 网络设置
-        net_frame = tk.LabelFrame(right_frame, text=' 网络设置 ', font=('Microsoft YaHei', 10, 'bold'))
+        net_frame = tk.LabelFrame(right_frame, text=' 网络设置（自动发现服务器） ', font=('Microsoft YaHei', 10, 'bold'))
         net_frame.pack(fill='x', pady=(0, 5))
 
         net_grid = tk.Frame(net_frame)
         net_grid.pack(padx=10, pady=5)
 
         tk.Label(net_grid, text='服务器IP：', font=('Microsoft YaHei', 9)).grid(row=0, column=0, sticky='e', pady=2)
-        self.var_server_ip = tk.StringVar(value='127.0.0.1')
-        tk.Entry(net_grid, textvariable=self.var_server_ip, width=20).grid(row=0, column=1, pady=2, padx=5)
+        self.var_server_ip = tk.StringVar(value='')
+        self.lbl_server_ip = tk.Label(net_grid, textvariable=self.var_server_ip, width=18, anchor='w',
+                font=('Microsoft YaHei', 9), fg='#27ae60', bg='#ecf0f1', relief='sunken')
+        self.lbl_server_ip.grid(row=0, column=1, pady=2, padx=5, sticky='w')
 
         tk.Label(net_grid, text='端口：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='e', pady=2)
         self.var_server_port = tk.IntVar(value=8080)
-        tk.Entry(net_grid, textvariable=self.var_server_port, width=20).grid(row=1, column=1, pady=2, padx=5)
+        tk.Label(net_grid, textvariable=self.var_server_port, width=18, anchor='w',
+                font=('Microsoft YaHei', 9), fg='#27ae60', bg='#ecf0f1', relief='sunken').grid(row=1, column=1, pady=2, padx=5, sticky='w')
 
         self.var_min_tray = tk.BooleanVar(value=False)
         tk.Checkbutton(net_grid, text='启动时最小化到托盘', variable=self.var_min_tray,
@@ -882,10 +970,6 @@ class TerminalApp:
         self.config['minimize_to_tray'] = self.var_min_tray.get()
         self.config['volume_step'] = self.var_step.get()
         save_config(self.config)
-        # 重新连接
-        self.ws_client.stop()
-        time.sleep(1)
-        self._connect_server()
         messagebox.showinfo('提示', '设置已保存')
 
     def _activate(self):
@@ -956,6 +1040,7 @@ class TerminalApp:
 
     def _quit(self):
         self.ws_client.stop()
+        self.server_discovery.stop()
         self.root.destroy()
 
     def run(self):

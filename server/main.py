@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端
-集中管理所有终端设备，WebSocket通信，Web管理界面
+坤展成终端管理系统 — 服务器端 v1.2
+基于HTTP轮询通信，更稳定可靠
 """
 
-import os, sys, json, time, asyncio, datetime, uuid
+import os, sys, json, time, datetime, uuid, threading
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, HTMLResponse
 
 # ===== 路径适配 =====
 if getattr(sys, 'frozen', False):
@@ -19,7 +18,7 @@ else:
 
 DB_FILE = os.path.join(BASE_DIR, 'devices.json')
 
-# ===== 数据存储（JSON文件，轻量级） =====
+# ===== 数据存储 =====
 def load_devices():
     if os.path.exists(DB_FILE):
         try:
@@ -27,175 +26,253 @@ def load_devices():
                 return json.load(f)
         except:
             pass
-    return {"devices": {}, "commands_log": []}
+    return {"clients": {}, "commands": {}}
 
 def save_devices(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ===== 终端连接管理 =====
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections = {}  # hostname -> websocket
-        self.device_info = {}         # hostname -> device info
-
-    async def connect(self, websocket, hostname, reg_info=None):
-        self.active_connections[hostname] = websocket
-        # 保存设备信息
-        if reg_info:
-            self.device_info[hostname] = reg_info
-        # 更新设备状态
-        data = load_devices()
-        if hostname in data['devices']:
-            data['devices'][hostname]['status'] = 'online'
-            data['devices'][hostname]['last_seen'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            if reg_info:
-                data['devices'][hostname]['info'] = reg_info
-        else:
-            data['devices'][hostname] = {
-                'status': 'online',
-                'first_seen': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'last_seen': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'info': reg_info or {},
-            }
-        save_devices(data)
-
-    async def disconnect(self, hostname):
-        if hostname in self.active_connections:
-            del self.active_connections[hostname]
-        data = load_devices()
-        if hostname in data['devices']:
-            data['devices'][hostname]['status'] = 'offline'
-            data['devices'][hostname]['last_seen'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            save_devices(data)
-
-    async def send_command(self, hostname, command_data):
-        if hostname in self.active_connections:
-            ws = self.active_connections[hostname]
-            await ws.send(json.dumps(command_data))
-            return True
-        return False
-
-    async def broadcast_command(self, command_data):
-        results = {}
-        for hostname, ws in self.active_connections.items():
-            try:
-                await ws.send(json.dumps(command_data))
-                results[hostname] = 'sent'
-            except:
-                results[hostname] = 'failed'
-        return results
-
-    def get_online_devices(self):
-        return list(self.active_connections.keys())
-
-manager = ConnectionManager()
 
 # ===== FastAPI =====
 app = FastAPI(title='坤展成终端管理系统')
 
+# 内存中的数据
+_clients = {}  # client_id -> client_info
+_commands = {}  # task_id -> command_info
+
+# 加载持久化数据
+def _load_persistent():
+    data = load_devices()
+    for cid, info in data.get('clients', {}).items():
+        _clients[cid] = {
+            **info,
+            'last_seen': datetime.datetime.strptime(info.get('last_seen', ''), '%Y-%m-%d %H:%M:%S') if info.get('last_seen') else datetime.datetime.now(),
+        }
+    for tid, cmd in data.get('commands', {}).items():
+        _commands[tid] = cmd
+
+_load_persistent()
+
+def _save_persistent():
+    data = {
+        'clients': {},
+        'commands': {},
+    }
+    for cid, info in _clients.items():
+        data['clients'][cid] = {
+            'hostname': info.get('hostname', ''),
+            'os': info.get('os', ''),
+            'os_version': info.get('os_version', ''),
+            'ip': info.get('ip', ''),
+            'mac': info.get('mac', ''),
+            'arch': info.get('arch', ''),
+            'cpu': info.get('cpu', ''),
+            'cpu_percent': info.get('cpu_percent', 0),
+            'memory_percent': info.get('memory_percent', 0),
+            'disk_percent': info.get('disk_percent', 0),
+            'first_seen': info.get('first_seen', ''),
+            'last_seen': info['last_seen'].strftime('%Y-%m-%d %H:%M:%S') if isinstance(info['last_seen'], datetime.datetime) else info.get('last_seen', ''),
+        }
+    for tid, cmd in _commands.items():
+        data['commands'][tid] = cmd
+    save_devices(data)
+
+
+# ===== UDP广播 =====
+import socket
+
+BROADCAST_PORT = 15080
+
+def _get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return '127.0.0.1'
+
+def _broadcast_server():
+    """每3秒向局域网广播服务器信息"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    local_ip = _get_local_ip()
+    msg = json.dumps({
+        'type': 'kzc_server',
+        'ip': local_ip,
+        'port': 8080,
+    }).encode('utf-8')
+    while True:
+        try:
+            sock.sendto(msg, ('255.255.255.255', BROADCAST_PORT))
+            sock.sendto(msg, ('<broadcast>', BROADCAST_PORT))
+        except:
+            pass
+        time.sleep(3)
+
+
+# ===== API路由 =====
 @app.get('/')
 async def index():
     return HTMLResponse(MANAGER_HTML)
 
 @app.get('/api/devices')
 async def get_devices():
-    data = load_devices()
-    # 合并实时在线状态
-    for hostname in data['devices']:
-        data['devices'][hostname]['status'] = 'online' if hostname in manager.active_connections else 'offline'
-    return data
+    """获取设备列表"""
+    result = []
+    now = datetime.datetime.now()
+    for cid, info in _clients.items():
+        last_seen = info.get('last_seen')
+        if isinstance(last_seen, str):
+            try:
+                last_seen = datetime.datetime.strptime(last_seen, '%Y-%m-%d %H:%M:%S')
+            except:
+                last_seen = now - datetime.timedelta(days=1)
+        online = (now - last_seen).total_seconds() < 10  # 10秒内在线
+        result.append({
+            'id': cid,
+            'hostname': info.get('hostname', ''),
+            'os': info.get('os', ''),
+            'os_version': info.get('os_version', ''),
+            'ip': info.get('ip', ''),
+            'mac': info.get('mac', ''),
+            'arch': info.get('arch', ''),
+            'cpu': info.get('cpu', ''),
+            'cpu_percent': info.get('cpu_percent', 0),
+            'memory_percent': info.get('memory_percent', 0),
+            'disk_percent': info.get('disk_percent', 0),
+            'status': 'online' if online else 'offline',
+            'last_seen': info['last_seen'].strftime('%Y-%m-%d %H:%M:%S') if isinstance(info['last_seen'], datetime.datetime) else str(info.get('last_seen', '')),
+            'first_seen': info.get('first_seen', ''),
+        })
+    return {'devices': result}
+
+@app.get('/api/commands')
+async def get_commands():
+    """获取指令日志"""
+    result = []
+    for tid, cmd in _commands.items():
+        result.append({
+            'id': tid,
+            'cmd': cmd.get('cmd', ''),
+            'target_hostname': cmd.get('target_hostname', ''),
+            'target_id': cmd.get('target_id', ''),
+            'time': cmd.get('time', ''),
+            'status': cmd.get('status', 'pending'),
+            'response': cmd.get('response', ''),
+        })
+    result.sort(key=lambda x: x['time'], reverse=True)
+    return {'logs': result[:100]}  # 只返回最近100条
 
 @app.post('/api/command')
 async def send_command(request: Request):
+    """发送指令"""
     body = await request.json()
-    targets = body.get('targets', [])  # hostname列表，空=全部在线
+    target_ids = body.get('target_ids', [])  # client_id列表
     cmd = body.get('cmd', '')
     extra = body.get('extra', {})
 
-    task_id = uuid.uuid4().hex[:8]
-    command_data = {
-        'type': 'command',
-        'task_id': task_id,
-        'cmd': cmd,
-        **extra,
-    }
+    if not target_ids:
+        target_ids = list(_clients.keys())
 
-    # 记录日志
-    data = load_devices()
-    data['commands_log'].append({
-        'task_id': task_id,
-        'cmd': cmd,
-        'targets': targets or manager.get_online_devices(),
-        'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'status': 'sent',
-    })
-    if len(data['commands_log']) > 500:
-        data['commands_log'] = data['commands_log'][-500:]
-    save_devices(data)
+    results = {}
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for target_id in target_ids:
+        if target_id not in _clients:
+            results[target_id] = 'offline'
+            continue
+        task_id = uuid.uuid4().hex[:8]
+        command = {
+            'id': task_id,
+            'cmd': cmd,
+            'extra': extra,
+            'target_id': target_id,
+            'target_hostname': _clients[target_id].get('hostname', ''),
+            'time': now,
+            'status': 'pending',
+            'response': '',
+        }
+        _commands[task_id] = command
+        results[target_id] = task_id
 
-    if not targets:
-        # 广播给所有在线设备
-        results = await manager.broadcast_command(command_data)
-    else:
-        results = {}
-        for hostname in targets:
-            success = await manager.send_command(hostname, command_data)
-            results[hostname] = 'sent' if success else 'offline'
+    _save_persistent()
+    return {'task_ids': results}
 
-    return {'task_id': task_id, 'results': results}
-
-@app.get('/api/logs')
-async def get_logs():
-    data = load_devices()
-    return {'logs': data.get('commands_log', [])[-50:]}
-
-# ===== WebSocket：终端连接 =====
-@app.websocket('/ws/client')
-async def ws_client(websocket: WebSocket):
-    await websocket.accept()
-    hostname = None
+@app.post('/api/client/register')
+async def client_register(request: Request):
+    """客户端注册"""
     try:
-        # 第一条消息是注册信息
-        msg = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-        data = json.loads(msg)
-        reg_info = {}
-        if data.get('type') == 'register':
-            hostname = data.get('hostname', 'unknown')
-            reg_info = {
-                'hostname': data.get('hostname', ''),
-                'os': data.get('os', ''),
-                'os_version': data.get('os_version', ''),
-                'ip': data.get('ip', ''),
-                'mac': data.get('mac', ''),
-                'arch': data.get('arch', ''),
-            }
-            manager.device_info[hostname] = reg_info
-            await manager.connect(websocket, hostname, reg_info)
+        data = await request.json()
+        hostname = data.get('hostname', '')
+        ip = data.get('ip', '')
+        mac = data.get('mac', '')
 
-        # 持续监听
-        while True:
-            msg = await websocket.receive_text()
-            try:
-                resp = json.loads(msg)
-                # 处理终端返回的结果
-                if resp.get('type') == 'result':
-                    data = load_devices()
-                    for log in data['commands_log']:
-                        if log['task_id'] == resp.get('task_id'):
-                            log['status'] = resp.get('status', 'unknown')
-                            log['response'] = resp.get('msg', '')
-                            break
-                    save_devices(data)
-            except:
-                pass
-    except WebSocketDisconnect:
-        pass
-    except:
-        pass
-    finally:
-        if hostname:
-            await manager.disconnect(hostname)
+        # 生成或查找client_id
+        client_id = None
+        for cid, info in _clients.items():
+            if info.get('hostname') == hostname and info.get('mac') == mac:
+                client_id = cid
+                break
+
+        if not client_id:
+            client_id = uuid.uuid4().hex[:12]
+
+        _clients[client_id] = {
+            'hostname': hostname,
+            'os': data.get('os', ''),
+            'os_version': data.get('os_version', ''),
+            'ip': ip,
+            'mac': mac,
+            'arch': data.get('arch', ''),
+            'cpu': data.get('cpu', ''),
+            'cpu_percent': data.get('cpu_percent', 0),
+            'memory_percent': data.get('memory_percent', 0),
+            'disk_percent': data.get('disk_percent', 0),
+            'first_seen': data.get('first_seen', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            'last_seen': datetime.datetime.now(),
+        }
+
+        _save_persistent()
+        return {'client_id': client_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get('/api/client/poll')
+async def client_poll(client_id: str):
+    """客户端轮询指令"""
+    if client_id not in _clients:
+        raise HTTPException(status_code=400, detail='未注册')
+
+    # 更新最后在线时间
+    _clients[client_id]['last_seen'] = datetime.datetime.now()
+
+    # 获取该客户端的待处理指令
+    commands = []
+    for tid, cmd in _commands.items():
+        if cmd.get('target_id') == client_id and cmd.get('status') == 'pending':
+            commands.append(cmd)
+
+    return {'client_id': client_id, 'commands': commands}
+
+@app.post('/api/client/result')
+async def client_result(request: Request):
+    """客户端上报执行结果"""
+    try:
+        data = await request.json()
+        client_id = data.get('client_id', '')
+        task_id = data.get('task_id', '')
+        status = data.get('status', 'unknown')
+        msg = data.get('response', data.get('msg', ''))
+
+        if task_id in _commands:
+            _commands[task_id]['status'] = status
+            _commands[task_id]['response'] = msg
+
+        _save_persistent()
+        return {'success': True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ===== 管理界面HTML =====
@@ -226,7 +303,6 @@ body { font-family: "Microsoft YaHei", Arial, sans-serif; background: #f5f6fa; }
 .btn-success { background: #27ae60; color: white; }
 .btn-primary { background: #3498db; color: white; }
 .btn:hover { opacity: 0.85; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
 th { background: #f8f9fa; font-weight: 600; color: #555; }
@@ -266,7 +342,7 @@ select, input[type="text"] { padding: 6px 10px; border: 1px solid #ddd; border-r
         <table>
             <thead><tr>
                 <th><input type="checkbox" id="selectAll" onchange="toggleAll()"></th>
-                <th>状态</th><th>主机名</th><th>IP</th><th>系统</th><th>架构</th><th>最后在线</th><th>操作</th>
+                <th>状态</th><th>主机名</th><th>IP</th><th>系统</th><th>架构</th><th>CPU</th><th>内存</th><th>最后在线</th><th>操作</th>
             </tr></thead>
             <tbody id="deviceTable"></tbody>
         </table>
@@ -284,73 +360,82 @@ select, input[type="text"] { padding: 6px 10px; border: 1px solid #ddd; border-r
 </div>
 
 <script>
+let devices = [];
+let selectedIds = [];
+
 function refresh() {
     fetch('/api/devices').then(r=>r.json()).then(data => {
-        var devices = data.devices || {};
-        var html = '', online = 0, offline = 0;
-        var hostnames = Object.keys(devices).sort();
-        for (var h of hostnames) {
-            var d = devices[h];
-            var isOnline = d.status === 'online';
-            if (isOnline) online++; else offline++;
-            var info = d.info || {};
-            html += '<tr><td><input type="checkbox" class="dev-check" value="'+h+'" '+(isOnline?'':'disabled')+'></td>';
-            html += '<td><span class="status-dot '+(isOnline?'online':'offline')+'"></span>'+(isOnline?'在线':'离线')+'</td>';
-            html += '<td>'+h+'</td>';
-            html += '<td>'+(info.ip||'-')+'</td>';
-            html += '<td>'+(info.os||'-')+' '+(info.os_version||'')+'</td>';
-            html += '<td>'+(info.arch||'-')+'</td>';
-            html += '<td>'+(d.last_seen||'-')+'</td>';
-            html += '<td>'+(isOnline?'<button class="btn btn-primary" onclick="sendCmdSingle(\\''+h+'\\',\\'status\\')">状态</button>':'-')+'</td></tr>';
-        }
-        document.getElementById('deviceTable').innerHTML = html;
-        document.getElementById('onlineCount').textContent = online;
-        document.getElementById('offlineCount').textContent = offline;
-        document.getElementById('totalCount').textContent = online + offline;
+        devices = data.devices || [];
+        renderDevices();
     });
-    fetch('/api/logs').then(r=>r.json()).then(data => {
-        var logs = (data.logs || []).reverse();
-        var html = '';
-        for (var l of logs.slice(0, 30)) {
-            var statusColor = l.status==='success'?'#27ae60':l.status==='failed'?'#e74c3c':'#f39c12';
-            html += '<tr><td>'+(l.time||'-')+'</td><td>'+(l.cmd||'-')+'</td>';
-            html += '<td>'+(l.targets||[]).join(', ')+'</td>';
-            html += '<td style="color:'+statusColor+'">'+(l.status||'-')+'</td>';
-            html += '<td>'+(l.response||'-')+'</td></tr>';
-        }
-        document.getElementById('logTable').innerHTML = html;
+    fetch('/api/commands').then(r=>r.json()).then(data => {
+        const logs = (data.logs || []).reverse();
+        renderLogs(logs);
     });
+}
+
+function renderDevices() {
+    let html = '', online = 0, offline = 0;
+    devices.forEach(d => {
+        const isOnline = d.status === 'online';
+        if (isOnline) online++; else offline++;
+        html += '<tr><td><input type="checkbox" class="dev-check" value="'+d.id+'" onchange="updateSelection()" '+(isOnline?'':'disabled')+'></td>';
+        html += '<td><span class="status-dot '+(isOnline?'online':'offline')+'"></span>'+(isOnline?'在线':'离线')+'</td>';
+        html += '<td>'+d.hostname+'</td>';
+        html += '<td>'+d.ip+'</td>';
+        html += '<td>'+d.os+' '+d.os_version+'</td>';
+        html += '<td>'+d.arch+'</td>';
+        html += '<td>'+d.cpu_percent+'%</td>';
+        html += '<td>'+d.memory_percent+'%</td>';
+        html += '<td>'+d.last_seen+'</td>';
+        html += '<td>'+(isOnline?'<button class="btn btn-primary" onclick="sendCmdSingle(\\''+d.id+'\\',\\'status\\')">状态</button>':'-')+'</td></tr>';
+    });
+    document.getElementById('deviceTable').innerHTML = html;
+    document.getElementById('onlineCount').textContent = online;
+    document.getElementById('offlineCount').textContent = offline;
+    document.getElementById('totalCount').textContent = online + offline;
+}
+
+function renderLogs(logs) {
+    let html = '';
+    logs.forEach(l => {
+        const statusColor = l.status==='success'?'#27ae60':l.status==='failed'?'#e74c3c':'#f39c12';
+        html += '<tr><td>'+(l.time||'-')+'</td><td>'+(l.cmd||'-')+'</td>';
+        html += '<td>'+(l.target_hostname||l.target_id||'-')+'</td>';
+        html += '<td style="color:'+statusColor+'">'+(l.status||'-')+'</td>';
+        html += '<td>'+(l.response||'-')+'</td></tr>';
+    });
+    document.getElementById('logTable').innerHTML = html;
 }
 
 function toggleAll() {
-    var checked = document.getElementById('selectAll').checked;
+    const checked = document.getElementById('selectAll').checked;
     document.querySelectorAll('.dev-check').forEach(c => { if (!c.disabled) c.checked = checked; });
+    updateSelection();
 }
 
-function getSelected() {
-    var targets = [];
-    document.querySelectorAll('.dev-check:checked').forEach(c => targets.push(c.value));
-    return targets;
+function updateSelection() {
+    selectedIds = [];
+    document.querySelectorAll('.dev-check:checked').forEach(c => selectedIds.push(c.value));
 }
 
 function sendCmd(cmd) {
-    var targets = getSelected();
-    if (targets.length === 0) { alert('请选择设备'); return; }
+    if (selectedIds.length === 0) { alert('请选择设备'); return; }
     fetch('/api/command', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({targets: targets, cmd: cmd})
+        body: JSON.stringify({target_ids: selectedIds, cmd: cmd})
     }).then(r=>r.json()).then(data => {
-        alert('指令已发送：' + cmd + '\\n任务ID：' + data.task_id);
+        alert('指令已发送：' + cmd + '\\n任务ID：' + JSON.stringify(data.task_ids));
         setTimeout(refresh, 2000);
     });
 }
 
-function sendCmdSingle(hostname, cmd) {
+function sendCmdSingle(id, cmd) {
     fetch('/api/command', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({targets: [hostname], cmd: cmd})
+        body: JSON.stringify({target_ids: [id], cmd: cmd})
     }).then(r=>r.json()).then(data => {
         setTimeout(refresh, 2000);
     });
@@ -362,52 +447,17 @@ setInterval(refresh, 10000);
 </body>
 </html>'''
 
-# ===== UDP广播：让客户端自动发现服务器 =====
-import socket, threading
-
-BROADCAST_PORT = 15080  # UDP广播端口
-
-def _get_local_ip():
-    """获取本机局域网IP"""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return '127.0.0.1'
-
-def _broadcast_server():
-    """每3秒向局域网广播服务器信息"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    local_ip = _get_local_ip()
-    msg = json.dumps({
-        'type': 'kzc_server',
-        'ip': local_ip,
-        'port': 8080,
-    }).encode('utf-8')
-    while True:
-        try:
-            sock.sendto(msg, ('<broadcast>', BROADCAST_PORT))
-            # 也发到255.255.255.255
-            sock.sendto(msg, ('255.255.255.255', BROADCAST_PORT))
-        except:
-            pass
-        time.sleep(3)
-
 # ===== 启动 =====
 if __name__ == '__main__':
     import uvicorn
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端')
+    print('  坤展成终端管理系统 — 服务器端 v1.2')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
-    print('  客户端将自动发现并连接本服务器')
+    print('  通信协议: HTTP轮询（稳定可靠）')
     print('=' * 50)
-    # 启动UDP广播线程
+    # 启动UDP广播
     t = threading.Thread(target=_broadcast_server, daemon=True)
     t.start()
     uvicorn.run(app, host='0.0.0.0', port=8080)

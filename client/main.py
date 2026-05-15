@@ -13,6 +13,24 @@ import urllib.request
 import urllib.error
 import socket
 
+# ===== 修复pycaw在PyInstaller打包后的问题 =====
+import comtypes
+import tempfile
+comtypes.gen_dir = os.path.join(tempfile.gettempdir(), 'kzc_comtypes')
+os.makedirs(comtypes.gen_dir, exist_ok=True)
+# 清理旧的生成文件，避免版本冲突
+try:
+    import shutil
+    if os.path.exists(comtypes.gen_dir):
+        for f in os.listdir(comtypes.gen_dir):
+            if f.startswith('__') or f.endswith('.py'):
+                try:
+                    os.remove(os.path.join(comtypes.gen_dir, f))
+                except:
+                    pass
+except:
+    pass
+
 # ===== 配置管理 =====
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -84,8 +102,11 @@ class VolumeControl:
             devices = AudioUtilities.GetSpeakers()
             interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
             volume = interface.QueryInterface(IAudioEndpointVolume)
-            return int(round(volume.GetMasterVolumeLevelScalar() * 100))
-        except:
+            vol = int(round(volume.GetMasterVolumeLevelScalar() * 100))
+            print(f'[音量] 当前: {vol}%')
+            return vol
+        except Exception as e:
+            print(f'[音量] 获取失败: {e}')
             return 0
 
     @staticmethod
@@ -821,33 +842,29 @@ class TerminalApp:
     # ==================== 音量操作 ====================
     def _vol_up(self):
         step = self.var_step.get()
-        if VolumeControl.volume_up(step):
-            self._update_volume_display()
-            self._show_msg(f'音量+{step}%')
-        else:
-            self._show_msg('音量控制失败')
+        VolumeControl.volume_up(step)
+        time.sleep(0.2)  # 等按键生效
+        self._update_volume_display()
+        self._show_msg(f'音量+{step}%')
 
     def _vol_down(self):
         step = self.var_step.get()
-        if VolumeControl.volume_down(step):
-            self._update_volume_display()
-            self._show_msg(f'音量-{step}%')
-        else:
-            self._show_msg('音量控制失败')
+        VolumeControl.volume_down(step)
+        time.sleep(0.2)
+        self._update_volume_display()
+        self._show_msg(f'音量-{step}%')
 
     def _mute(self):
-        if VolumeControl.mute():
-            self._update_volume_display()
-            self._show_msg('已静音')
-        else:
-            self._show_msg('静音失败')
+        VolumeControl.mute()
+        time.sleep(0.2)
+        self._update_volume_display()
+        self._show_msg('已静音')
 
     def _unmute(self):
-        if VolumeControl.unmute():
-            self._update_volume_display()
-            self._show_msg('已取消静音')
-        else:
-            self._show_msg('取消静音失败')
+        VolumeControl.unmute()
+        time.sleep(0.2)
+        self._update_volume_display()
+        self._show_msg('已取消静音')
 
     def _save_step(self):
         self.config['volume_step'] = self.var_step.get()
@@ -858,7 +875,6 @@ class TerminalApp:
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
         self.lbl_volume.config(text=f'音量：{vol}%{mute_str}')
-
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

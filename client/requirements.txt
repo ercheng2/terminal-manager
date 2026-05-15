@@ -1,5 +1,3 @@
-pycaw
-comtypes
 pystray
 Pillow
 psutil

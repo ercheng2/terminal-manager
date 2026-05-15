@@ -66,13 +66,14 @@ class VolumeControl:
     _app_ref = None
     _ps = None       # PowerShell进程
     _ps_ok = False   # PowerShell是否可用
+    _diag = '未初始化'
     _lock = threading.Lock()
 
     # C#代码 - Core Audio API访问
     _CS = r'''
 using System;using System.Runtime.InteropServices;
 public class V{
- [ComImport,GUID("BCDE0395-E52F-467C-8E3D-C4579291692E")]class E{}
+ [ComImport,Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]class E{}
  [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
  interface IE{void X1();void G(int a,int b,out object d);}
  [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -113,14 +114,17 @@ public class V{
                 line = VolumeControl._ps.stdout.readline().decode('utf-8', errors='replace').strip()
                 if '__INIT_OK__' in line:
                     VolumeControl._ps_ok = True
+                    VolumeControl._diag = 'PS:OK'
                     print('[音量] PowerShell+C# 初始化成功')
                     return True
                 if VolumeControl._ps.poll() is not None:
                     break
             print('[音量] PowerShell初始化失败')
+            VolumeControl._diag = 'PS:初始化失败'
             return False
         except Exception as e:
             print(f'[音量] PowerShell启动失败: {e}')
+            VolumeControl._diag = 'PS:启动失败'
             return False
 
     @staticmethod
@@ -148,13 +152,17 @@ public class V{
                 parts = result.split(',')
                 VolumeControl._cached_volume = int(parts[0])
                 VolumeControl._cached_muted = (parts[1] == '1')
+                VolumeControl._diag = 'OK'
                 return
             except:
                 pass
         # PowerShell不可用时，尝试重启
         if not result:
             print('[音量] PowerShell断开，尝试重启...')
+            VolumeControl._diag = 'PS:断开'
             VolumeControl._start_ps()
+        else:
+            VolumeControl._diag = f'READ_ERR:{result}'
 
     @staticmethod
     def start_bg_monitor(app=None):
@@ -188,6 +196,7 @@ public class V{
                     pass
         else:
             print('[音量] PowerShell不可用，使用keybd_event备用')
+            VolumeControl._diag = 'PS:不可用'
 
         while VolumeControl._bg_running:
             if VolumeControl._ps_ok:
@@ -262,6 +271,10 @@ public class V{
     @staticmethod
     def is_muted():
         return VolumeControl._cached_muted
+
+    @staticmethod
+    def get_diag():
+        return VolumeControl._diag
 
     @staticmethod
     def _key_event(vk_code, press_count=1):
@@ -967,7 +980,8 @@ class TerminalApp:
         vol = VolumeControl.get_volume()
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
-        self.lbl_volume.config(text=f'音量：{vol}%{mute_str}')
+        diag = VolumeControl.get_diag()
+        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} [{diag}]')
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

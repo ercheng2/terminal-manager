@@ -5,40 +5,76 @@ on:
     branches: [master]
 
 jobs:
-  build:
+  build-client:
     runs-on: windows-latest
     permissions:
       contents: write
-    
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install dependencies
+      - name: Install client dependencies
         run: |
           cd client
           pip install -r requirements.txt
           pip install pyinstaller
-
-      - name: Build exe
+      - name: Build client exe
         run: |
           cd client
           pyinstaller --name "TerminalManager" --onefile --hidden-import pycaw --hidden-import comtypes --hidden-import websockets --hidden-import pystray --hidden-import PIL --hidden-import psutil --clean main.py
-
-      - name: Upload artifact
+      - name: Upload client artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TerminalManager-exe
+          name: TerminalManager-client
           path: client/dist/TerminalManager.exe
 
+  build-server:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install server dependencies
+        run: |
+          cd server
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build server exe
+        run: |
+          cd server
+          pyinstaller --name "TerminalManager-Server" --onefile --hidden-import uvicorn.logging --hidden-import uvicorn.loops --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols --hidden-import uvicorn.protocols.http --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan --hidden-import uvicorn.lifespan.on --clean main.py
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TerminalManager-server
+          path: server/dist/TerminalManager-Server.exe
+
+  release:
+    needs: [build-client, build-server]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: TerminalManager-client
+          path: ./release/
+      - uses: actions/download-artifact@v4
+        with:
+          name: TerminalManager-server
+          path: ./release/
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0-${{ github.run_number }}
-          files: client/dist/TerminalManager.exe
+          files: |
+            release/TerminalManager.exe
+            release/TerminalManager-Server.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

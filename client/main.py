@@ -5,7 +5,7 @@
 基于HTTP轮询通信，更稳定可靠
 """
 
-import os, sys, json, time, threading, platform, subprocess
+import os, sys, json, time, threading, platform, subprocess, ctypes
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path

@@ -13,24 +13,6 @@ import urllib.request
 import urllib.error
 import socket
 
-# ===== 修复pycaw在PyInstaller打包后的问题 =====
-import comtypes
-import tempfile
-comtypes.gen_dir = os.path.join(tempfile.gettempdir(), 'kzc_comtypes')
-os.makedirs(comtypes.gen_dir, exist_ok=True)
-# 清理旧的生成文件，避免版本冲突
-try:
-    import shutil
-    if os.path.exists(comtypes.gen_dir):
-        for f in os.listdir(comtypes.gen_dir):
-            if f.startswith('__') or f.endswith('.py'):
-                try:
-                    os.remove(os.path.join(comtypes.gen_dir, f))
-                except:
-                    pass
-except:
-    pass
-
 # ===== 配置管理 =====
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -72,59 +54,172 @@ def save_config(cfg):
 
 # ===== 音量控制 =====
 class VolumeControl:
-    """Windows音量控制 - 使用keybd_event模拟键盘音量键，最可靠零依赖"""
+    """Windows音量控制 - 用C#编译的VolumeHelper.exe读写音量，最可靠"""
 
     VK_VOLUME_MUTE = 0xAD
     VK_VOLUME_UP = 0xAF
     VK_VOLUME_DOWN = 0xAE
+    _helper_exe = None
+
+    # C#源码 - 直接调Windows Core Audio API
+    _CS_CODE = r'''
+using System;
+using System.Runtime.InteropServices;
+
+public class VolumeHelper {
+    [Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioEndpointVolume {
+        int RegisterControlChangeNotify(IntPtr pNotify);
+        int UnregisterControlChangeNotify(IntPtr pNotify);
+        int GetChannelCount(out int pnChannelCount);
+        int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+        int GetMasterVolumeLevelScalar(out float pfLevel);
+        int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+        int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+        int SetMute(int bMute, ref Guid pguidEventContext);
+        int GetMute(out int pbMute);
+    }
+
+    [Guid("D666063F-1587-4E43-81F1-B948E807363F"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDevice {
+        int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+    }
+
+    [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IMMDeviceEnumerator {
+        int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr ppDevices);
+        int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
+        int GetDevice(string pwstrId, out IMMDevice ppDevice);
+        int RegisterEndpointNotificationCallback(IntPtr pClient);
+    }
+
+    [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+    class MMDeviceEnumerator {}
+
+    static IAudioEndpointVolume GetVolumeInterface() {
+        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        IMMDevice device;
+        enumerator.GetDefaultAudioEndpoint(0, 0, out device);
+        Guid iid = new Guid("5e2e8932-c721-4b8c-bf6e-4f3dc8e35617");
+        IAudioEndpointVolume volume;
+        device.Activate(ref iid, 0, IntPtr.Zero, out volume);
+        return volume;
+    }
+
+    static void Main(string[] args) {
+        if (args.Length == 0) return;
+        var vol = GetVolumeInterface();
+        string cmd = args[0].ToLower();
+
+        if (cmd == "get") {
+            float level;
+            vol.GetMasterVolumeLevelScalar(out level);
+            Console.Write(Math.Round(level * 100));
+        } else if (cmd == "mute") {
+            int mute;
+            vol.GetMute(out mute);
+            Console.Write(mute);
+        } else if (cmd == "set" && args.Length > 1) {
+            float level = float.Parse(args[1]) / 100f;
+            Guid ctx = Guid.Empty;
+            vol.SetMasterVolumeLevelScalar(level, ref ctx);
+            Console.Write("OK");
+        } else if (cmd == "setmute" && args.Length > 1) {
+            int mute = int.Parse(args[1]);
+            Guid ctx = Guid.Empty;
+            vol.SetMute(mute, ref ctx);
+            Console.Write("OK");
+        }
+    }
+}
+'''
 
     @staticmethod
-    def _key_event(vk_code, press_count=1):
-        """模拟按键 - 最可靠的方式"""
+    def _ensure_helper():
+        """首次使用时编译C#辅助程序"""
+        if VolumeControl._helper_exe and os.path.exists(VolumeControl._helper_exe):
+            return VolumeControl._helper_exe
+
+        exe_path = os.path.join(BASE_DIR, 'VolumeHelper.exe')
+        if os.path.exists(exe_path):
+            VolumeControl._helper_exe = exe_path
+            return exe_path
+
+        # 写C#源码
+        cs_path = os.path.join(BASE_DIR, 'VolumeHelper.cs')
+        with open(cs_path, 'w', encoding='utf-8') as f:
+            f.write(VolumeControl._CS_CODE)
+
+        # 找csc.exe编译器
+        windir = os.environ.get('WINDIR', r'C:\Windows')
+        csc_paths = [
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework64', 'v3.5', 'csc.exe'),
+            os.path.join(windir, 'Microsoft.NET', 'Framework', 'v3.5', 'csc.exe'),
+        ]
+        csc = None
+        for p in csc_paths:
+            if os.path.exists(p):
+                csc = p
+                break
+
+        if not csc:
+            print('[音量] 未找到C#编译器')
+            return None
+
         try:
-            for _ in range(press_count):
-                ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)  # key down
-                ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)  # key up
-                time.sleep(0.05)
-            return True
+            r = subprocess.run([csc, '/nologo', '/out:' + exe_path, cs_path],
+                             capture_output=True, text=True, timeout=15)
+            if os.path.exists(exe_path):
+                VolumeControl._helper_exe = exe_path
+                print(f'[音量] VolumeHelper.exe 编译成功')
+                # 清理cs文件
+                try:
+                    os.remove(cs_path)
+                except:
+                    pass
+                return exe_path
+            else:
+                print(f'[音量] 编译失败: {r.stderr}')
         except Exception as e:
-            print(f'[音量] 按键模拟失败: {e}')
-            return False
+            print(f'[音量] 编译异常: {e}')
+        return None
+
+    @staticmethod
+    def _call_helper(*args):
+        """调用VolumeHelper.exe"""
+        exe = VolumeControl._ensure_helper()
+        if not exe:
+            return None
+        try:
+            r = subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=3)
+            return r.stdout.strip()
+        except:
+            return None
 
     @staticmethod
     def get_volume():
         """获取当前音量 0-100"""
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
-            vol = int(round(volume.GetMasterVolumeLevelScalar() * 100))
-            print(f'[音量] 当前: {vol}%')
-            return vol
-        except Exception as e:
-            print(f'[音量] 获取失败: {e}')
-            return 0
+        result = VolumeControl._call_helper('get')
+        if result is not None:
+            try:
+                return int(float(result))
+            except:
+                pass
+        # fallback: 用keybd_event方式控制，读不到就返回0
+        return 0
 
     @staticmethod
     def set_volume(val):
-        """设置音量：先降到0再升到目标"""
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
-            volume.SetMasterVolumeLevelScalar(val / 100.0, None)
+        """设置音量 0-100"""
+        result = VolumeControl._call_helper('set', str(val))
+        if result == 'OK':
             return True
-        except:
-            pass
-        # pycaw失败，用按键模拟
+        # fallback: keybd_event
         VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
         time.sleep(0.1)
         presses = max(1, val // 2)
@@ -133,50 +228,47 @@ class VolumeControl:
 
     @staticmethod
     def volume_up(step=10):
-        """音量+，每次按键约2%"""
         presses = max(1, step // 2)
         return VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, presses)
 
     @staticmethod
     def volume_down(step=10):
-        """音量-"""
         presses = max(1, step // 2)
         return VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, presses)
 
     @staticmethod
     def mute():
-        """静音"""
+        result = VolumeControl._call_helper('setmute', '1')
+        if result == 'OK':
+            return True
         return VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
 
     @staticmethod
     def unmute():
-        """取消静音（静音键是toggle，如果已静音就按一次取消）"""
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
-            if volume.GetMute() == 1:
-                VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
+        result = VolumeControl._call_helper('setmute', '0')
+        if result == 'OK':
             return True
-        except:
-            VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
-            return True
+        return VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
 
     @staticmethod
     def is_muted():
+        result = VolumeControl._call_helper('mute')
+        if result is not None:
+            try:
+                return int(result) == 1
+            except:
+                pass
+        return False
+
+    @staticmethod
+    def _key_event(vk_code, press_count=1):
+        """模拟按键"""
         try:
-            import pythoncom
-            pythoncom.CoInitialize()
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            from comtypes import CLSCTX_ALL
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = interface.QueryInterface(IAudioEndpointVolume)
-            return volume.GetMute() == 1
+            for _ in range(press_count):
+                ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
+                time.sleep(0.05)
+            return True
         except:
             return False
 

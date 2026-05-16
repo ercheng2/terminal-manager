@@ -840,17 +840,41 @@ class ServerGUI:
 # ===== 启动 =====
 def main():
     import uvicorn
+    import asyncio
     
     # 启动UDP广播
     t_broadcast = threading.Thread(target=_broadcast_server, daemon=True)
     t_broadcast.start()
     
-    # 启动FastAPI服务（后台线程）
+    # 启动FastAPI服务（后台线程，用Config+Server确保事件循环正确）
     def run_server():
-        uvicorn.run(app, host='0.0.0.0', port=8080, log_level='info')
+        try:
+            config = uvicorn.Config(app, host='0.0.0.0', port=8080, log_level='info')
+            server = uvicorn.Server(config)
+            # 在新的事件循环中运行
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(server.serve())
+        except Exception as e:
+            print(f'[服务器] FastAPI启动失败: {e}')
     
     t_server = threading.Thread(target=run_server, daemon=True)
     t_server.start()
+    
+    # 等待服务器启动
+    import socket as _socket
+    for i in range(15):
+        time.sleep(0.5)
+        try:
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            s.settimeout(1)
+            s.connect(('127.0.0.1', 8080))
+            s.close()
+            print('[服务器] FastAPI启动成功，端口8080已监听')
+            break
+        except:
+            if i == 14:
+                print('[服务器] 警告：FastAPI可能未成功启动')
     
     local_ip = _get_local_ip()
     print('=' * 50)

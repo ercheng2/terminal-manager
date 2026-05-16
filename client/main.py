@@ -54,7 +54,7 @@ def save_config(cfg):
 
 # ===== 音量控制 =====
 class VolumeControl:
-    """Windows音量控制 - PowerShell + C# Core Audio"""
+    """Windows音量控制 - PowerShell直接COM读取 + keybd_event控制"""
     VK_VOLUME_MUTE = 0xAD
     VK_VOLUME_UP = 0xAF
     VK_VOLUME_DOWN = 0xAE
@@ -64,105 +64,33 @@ class VolumeControl:
     _bg_thread = None
     _bg_running = False
     _app_ref = None
-    _ps = None       # PowerShell进程
-    _ps_ok = False   # PowerShell是否可用
-    _diag = '未初始化'
-    _lock = threading.Lock()
-
-    # C#代码 - Core Audio API访问
-    _CS = r'''
-using System;using System.Runtime.InteropServices;
-public class V{
- [ComImport,Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]class E{}
- [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface IE{void X1();void G(int a,int b,out object d);}
- [Guid("D666063F-1587-4E43-81F1-B948E807363F"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface ID{void A(ref Guid i,int c,IntPtr p,out object v);}
- [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
- interface IV{
-  int X0(IntPtr a);int X1(IntPtr a);int X2(out uint c);
-  int X3(float a,ref Guid b);int X4(float a,ref Guid b);int X5(out float a);int X6(out float a);
-  int X7(uint a,float b,ref Guid c);int X8(uint a,float b,ref Guid c);int X9(uint a,out float b);int X10(uint a,out float b);
-  int X11(int a,ref Guid b);int X12(out int a);
-  int X13(out uint a,out uint b);int X14(ref Guid a);int X15(ref Guid a);int X16(out uint a);int X17(out float a,out float b,out float c);
- }
- static IV GetV(){var e=(IE)new E();object d;e.G(0,0,out d);var dev=(ID)d;var iid=new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");object v;dev.A(ref iid,0,IntPtr.Zero,out v);return(IV)v;}
- public static string Read(){try{var v=GetV();float f;v.X6(out f);int m;v.X12(out m);return((int)Math.Round(f*100))+","+m;}catch(Exception ex){return"ERR:"+ex.Message;}}
- public static string SetVol(int val){try{var v=GetV();float f=val/100f;Guid g=Guid.Empty;v.X4(f,ref g);return"OK";}catch(Exception ex){return"ERR:"+ex.Message;}}
- public static string SetMute(int m){try{var v=GetV();Guid g=Guid.Empty;v.X11(m,ref g);return"OK";}catch(Exception ex){return"ERR:"+ex.Message;}}
-}
-'''
-
-    @staticmethod
-    def _start_ps():
-        """启动PowerShell进程并编译C#代码"""
-        try:
-            VolumeControl._ps = subprocess.Popen(
-                ['powershell', '-NoProfile', '-NonInteractive', '-Command', '-'],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                creationflags=0x08000000,
-            )
-            # 发送Add-Type编译命令
-            cmd = 'Add-Type -TypeDefinition @"\n' + VolumeControl._CS + '\n"@ -Language CSharp\n'
-            VolumeControl._ps.stdin.write(cmd.encode('utf-8'))
-            VolumeControl._ps.stdin.write(b'echo __INIT_OK__\n')
-            VolumeControl._ps.stdin.flush()
-            # 等待初始化完成（最多30秒）
-            for _ in range(300):
-                line = VolumeControl._ps.stdout.readline().decode('utf-8', errors='replace').strip()
-                if '__INIT_OK__' in line:
-                    VolumeControl._ps_ok = True
-                    VolumeControl._diag = 'PS:OK'
-                    print('[音量] PowerShell+C# 初始化成功')
-                    return True
-                if VolumeControl._ps.poll() is not None:
-                    break
-            print('[音量] PowerShell初始化失败')
-            VolumeControl._diag = 'PS:初始化失败'
-            return False
-        except Exception as e:
-            print(f'[音量] PowerShell启动失败: {e}')
-            VolumeControl._diag = 'PS:启动失败'
-            return False
-
-    @staticmethod
-    def _ps_cmd(cmd):
-        """发送命令到PowerShell并读取结果"""
-        if not VolumeControl._ps_ok or not VolumeControl._ps or VolumeControl._ps.poll() is not None:
-            VolumeControl._ps_ok = False
-            return None
-        with VolumeControl._lock:
-            try:
-                VolumeControl._ps.stdin.write((cmd + '\n').encode('utf-8'))
-                VolumeControl._ps.stdin.flush()
-                line = VolumeControl._ps.stdout.readline().decode('utf-8', errors='replace').strip()
-                return line
-            except:
-                VolumeControl._ps_ok = False
-                return None
 
     @staticmethod
     def _read_volume():
-        """读取音量和静音状态"""
-        result = VolumeControl._ps_cmd('[V]::Read()')
-        if result and ',' in result and not result.startswith('ERR'):
-            try:
-                parts = result.split(',')
-                VolumeControl._cached_volume = int(parts[0])
-                VolumeControl._cached_muted = (parts[1] == '1')
-                VolumeControl._diag = 'OK'
-                return
-            except:
-                pass
-        # PowerShell不可用时，尝试重启
-        if not result:
-            print('[音量] PowerShell断开，尝试重启...')
-            VolumeControl._diag = 'PS:断开'
-            VolumeControl._start_ps()
-        else:
-            VolumeControl._diag = f'READ_ERR:{result}'
+        """用PowerShell直接调COM读取音量"""
+        ps_cmd = (
+            '$e = New-Object -ComObject MMDeviceEnumerator.MMDeviceEnumerator; '
+            '$d = $e.GetDefaultAudioEndpoint(0, 0); '
+            '$v = $d.Activate([System.Type]::GetTypeFromCLSID("{5CDF2C82-841E-4546-9722-0CF74078229A}"), 0, $null); '
+            '$s = $v.GetMasterVolumeLevelScalar(); '
+            '$m = $v.GetMute(); '
+            'Write-Output ([math]::Round($s*100)); Write-Output $m'
+        )
+        try:
+            r = subprocess.run(
+                ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
+                capture_output=True, text=True, timeout=10,
+                creationflags=0x08000000)
+            lines = r.stdout.strip().split('\n')
+            if len(lines) >= 2 and lines[0].strip().isdigit():
+                VolumeControl._cached_volume = int(lines[0].strip())
+                VolumeControl._cached_muted = (lines[1].strip().lower() == 'true')
+                return True
+            else:
+                print(f'[音量] PS输出异常: [{r.stdout.strip()}] err=[{r.stderr.strip()[:100]}]')
+        except Exception as e:
+            print(f'[音量] PS读取异常: {e}')
+        return False
 
     @staticmethod
     def start_bg_monitor(app=None):
@@ -174,33 +102,26 @@ public class V{
     @staticmethod
     def stop_bg_monitor():
         VolumeControl._bg_running = False
-        if VolumeControl._ps:
-            try:
-                VolumeControl._ps.stdin.write(b'exit\n')
-                VolumeControl._ps.stdin.flush()
-                VolumeControl._ps.terminate()
-            except:
-                pass
 
     @staticmethod
     def _bg_loop():
-        """后台：启动PowerShell → 读取初始音量 → 通知UI → 每5秒轮询"""
-        VolumeControl._start_ps()
-        if VolumeControl._ps_ok:
-            VolumeControl._read_volume()
+        ok = VolumeControl._read_volume()
+        if ok:
             print(f'[音量] ★首次读取: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
+        else:
+            print('[音量] 首次读取失败')
+        if VolumeControl._app_ref:
+            try:
+                VolumeControl._app_ref.root.after(0, VolumeControl._app_ref._update_volume_display)
+            except:
+                pass
+        while VolumeControl._bg_running:
+            VolumeControl._read_volume()
             if VolumeControl._app_ref:
                 try:
                     VolumeControl._app_ref.root.after(0, VolumeControl._app_ref._update_volume_display)
                 except:
                     pass
-        else:
-            print('[音量] PowerShell不可用，使用keybd_event备用')
-            VolumeControl._diag = 'PS:不可用'
-
-        while VolumeControl._bg_running:
-            if VolumeControl._ps_ok:
-                VolumeControl._read_volume()
             time.sleep(5)
 
     @staticmethod
@@ -210,60 +131,32 @@ public class V{
     @staticmethod
     def set_volume(val):
         val = max(0, min(100, val))
-        if VolumeControl._ps_ok:
-            result = VolumeControl._ps_cmd(f'[V]::SetVol({val})')
-            if result == 'OK':
-                VolumeControl._cached_volume = val
-                return True
-        # 备用：keybd_event
         VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, 50)
-        time.sleep(0.05)
+        time.sleep(0.1)
         VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, val // 2))
         VolumeControl._cached_volume = val
         return True
 
     @staticmethod
     def volume_up(step=10):
-        if VolumeControl._ps_ok:
-            new_vol = min(100, VolumeControl._cached_volume + step)
-            result = VolumeControl._ps_cmd(f'[V]::SetVol({new_vol})')
-            if result == 'OK':
-                VolumeControl._cached_volume = new_vol
-                return True
         VolumeControl._key_event(VolumeControl.VK_VOLUME_UP, max(1, step // 2))
         VolumeControl._cached_volume = min(100, VolumeControl._cached_volume + step)
         return True
 
     @staticmethod
     def volume_down(step=10):
-        if VolumeControl._ps_ok:
-            new_vol = max(0, VolumeControl._cached_volume - step)
-            result = VolumeControl._ps_cmd(f'[V]::SetVol({new_vol})')
-            if result == 'OK':
-                VolumeControl._cached_volume = new_vol
-                return True
         VolumeControl._key_event(VolumeControl.VK_VOLUME_DOWN, max(1, step // 2))
         VolumeControl._cached_volume = max(0, VolumeControl._cached_volume - step)
         return True
 
     @staticmethod
     def mute():
-        if VolumeControl._ps_ok:
-            result = VolumeControl._ps_cmd('[V]::SetMute(1)')
-            if result == 'OK':
-                VolumeControl._cached_muted = True
-                return True
         VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = True
         return True
 
     @staticmethod
     def unmute():
-        if VolumeControl._ps_ok:
-            result = VolumeControl._ps_cmd('[V]::SetMute(0)')
-            if result == 'OK':
-                VolumeControl._cached_muted = False
-                return True
         VolumeControl._key_event(VolumeControl.VK_VOLUME_MUTE, 1)
         VolumeControl._cached_muted = False
         return True
@@ -273,12 +166,7 @@ public class V{
         return VolumeControl._cached_muted
 
     @staticmethod
-    def get_diag():
-        return VolumeControl._diag
-
-    @staticmethod
     def _key_event(vk_code, press_count=1):
-        """keybd_event备用方案"""
         try:
             for _ in range(press_count):
                 ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
@@ -842,8 +730,10 @@ class TerminalApp:
                 command=self._save_step)
         self.step_spin.pack(side='left', padx=3)
         # 点击其他地方时自动保存并移走光标
-        self.step_spin.bind('<FocusOut>', lambda e: self._save_step())
-        self.step_spin.bind('<Return>', lambda e: self.root.focus_set())
+        self.step_spin.bind('<FocusOut>', self._on_step_focusout)
+        self.step_spin.bind('<Return>', self._on_step_return)
+        # 点击窗口其他地方也移走光标
+        self.root.bind('<Button-1>', self._on_root_click)
         tk.Label(step_frame, text='%').pack(side='left')
         tk.Button(step_frame, text='保存', command=self._save_step).pack(side='left', padx=8)
 
@@ -976,12 +866,30 @@ class TerminalApp:
         self.config['volume_step'] = self.var_step.get()
         save_config(self.config)
 
+    def _on_step_focusout(self, event):
+        """步长输入框失去焦点时保存"""
+        self._save_step()
+
+    def _on_step_return(self, event):
+        """按回车时保存并移走光标"""
+        self._save_step()
+        self.root.focus_set()
+
+    def _on_root_click(self, event):
+        """点击窗口其他地方时，如果光标在步长输入框则移走"""
+        try:
+            widget = event.widget
+            if widget != self.step_spin:
+                self._save_step()
+                self.root.focus_set()
+        except:
+            pass
+
     def _update_volume_display(self):
         vol = VolumeControl.get_volume()
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
-        diag = VolumeControl.get_diag()
-        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} [{diag}]')
+        self.lbl_volume.config(text=f'音量：{vol}%{mute_str}')
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

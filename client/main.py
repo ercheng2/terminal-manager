@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "startup_items": [],
     "activated": False,
     "activation_key": "",
+    "download_dir": "",
 }
 
 def load_config():
@@ -962,11 +963,80 @@ class CommandHandler:
             script_type = data.get('script_type', 'bat')
             res = PowerControl.run_script(script, script_type)
             result = {'status': 'success' if res['success'] else 'failed', 'msg': res.get('output', '') or res.get('error', '')}
+        elif cmd == 'file_transfer':
+            # 文件传输指令
+            file_name = data.get('extra', {}).get('file_name', '')
+            file_size = data.get('extra', {}).get('file_size', 0)
+            download_url = data.get('extra', {}).get('download_url', '')
+            if file_name and download_url:
+                # 在后台线程下载文件
+                threading.Thread(target=self._download_file, args=(task_id, file_name, file_size, download_url), daemon=True).start()
+                result = {'status': 'pending', 'msg': f'正在接收文件: {file_name}'}
+            else:
+                result = {'status': 'failed', 'msg': '文件传输参数不完整'}
 
         print(f'[指令] 结果: {result}')
         self.app.http_client.send_result(task_id, result['status'], result['msg'])
         self.app.root.after(0, lambda: self.app._show_msg(f'远程指令 {cmd}: {result["msg"]}'))
         return result
+
+    def _download_file(self, task_id, file_name, file_size, download_url):
+        """后台下载文件"""
+        import urllib.request
+        import urllib.error
+        
+        # 展开环境变量
+        download_dir = self.app.config.get('download_dir', '')
+        if not download_dir:
+            # 默认保存到桌面/KZC_Received
+            desktop = os.path.expandvars('%USERPROFILE%\\Desktop')
+            download_dir = os.path.join(desktop, 'KZC_Received')
+        
+        # 安全检查：文件名不能包含路径穿越
+        file_name = os.path.basename(file_name)
+        if '..' in file_name or '/' in file_name or '\\' in file_name:
+            self.app.http_client.send_result(task_id, 'failed', '无效的文件名')
+            self.app.root.after(0, lambda: self.app._show_msg(f'文件传输失败: 无效的文件名'))
+            return
+        
+        # 创建下载目录
+        try:
+            os.makedirs(download_dir, exist_ok=True)
+        except Exception as e:
+            self.app.http_client.send_result(task_id, 'failed', f'创建目录失败: {e}')
+            self.app.root.after(0, lambda: self.app._show_msg(f'文件传输失败: {e}'))
+            return
+        
+        dest_path = os.path.join(download_dir, file_name)
+        
+        try:
+            print(f'[文件传输] 开始下载: {file_name} ({file_size} bytes) -> {dest_path}')
+            self.app.root.after(0, lambda: self.app._show_msg(f'正在接收文件: {file_name}'))
+            
+            # 流式下载，不一次性读入内存
+            req = urllib.request.Request(download_url, headers={'User-Agent': 'KZC-Terminal-Manager'})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total_read = 0
+                with open(dest_path, 'wb') as f:
+                    while True:
+                        chunk = resp.read(65536)  # 64KB
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        total_read += len(chunk)
+            
+            print(f'[文件传输] 下载完成: {dest_path}')
+            self.app.http_client.send_result(task_id, 'success', f'文件已保存: {dest_path}')
+            self.app.root.after(0, lambda: self.app._show_msg(f'文件接收完成: {file_name}'))
+            
+        except urllib.error.URLError as e:
+            print(f'[文件传输] 下载失败: {e}')
+            self.app.http_client.send_result(task_id, 'failed', f'下载失败: {e}')
+            self.app.root.after(0, lambda: self.app._show_msg(f'文件传输失败: {e}'))
+        except Exception as e:
+            print(f'[文件传输] 异常: {e}')
+            self.app.http_client.send_result(task_id, 'failed', f'异常: {e}')
+            self.app.root.after(0, lambda: self.app._show_msg(f'文件传输失败: {e}'))
 
 
 # ===== 主窗口 =====
@@ -1145,8 +1215,17 @@ class TerminalApp:
         tk.Label(net_grid, text='端口：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='e', pady=2)
         self.var_server_port = tk.IntVar(value=8080)
         tk.Label(net_grid, textvariable=self.var_server_port, width=18, anchor='w', font=('Microsoft YaHei', 9), fg='#27ae60', bg='#ecf0f1', relief='sunken').grid(row=1, column=1, pady=2, padx=5, sticky='w')
+        
+        # 下载目录设置
+        tk.Label(net_grid, text='下载目录：', font=('Microsoft YaHei', 9)).grid(row=3, column=0, sticky='e', pady=2)
+        dl_dir_frame = tk.Frame(net_grid)
+        dl_dir_frame.grid(row=3, column=1, pady=2, padx=5, sticky='w')
+        self.var_download_dir = tk.StringVar(value='')
+        tk.Entry(dl_dir_frame, textvariable=self.var_download_dir, width=25, font=('Microsoft YaHei', 9)).pack(side='left')
+        tk.Button(dl_dir_frame, text='浏览', width=5, command=self._browse_download_dir).pack(side='left', padx=3)
+        
         self.var_min_tray = tk.BooleanVar(value=False)
-        tk.Checkbutton(net_grid, text='启动时最小化到托盘', variable=self.var_min_tray, font=('Microsoft YaHei', 9)).grid(row=2, column=0, columnspan=2, sticky='w', pady=2)
+        tk.Checkbutton(net_grid, text='启动时最小化到托盘', variable=self.var_min_tray, font=('Microsoft YaHei', 9)).grid(row=4, column=0, columnspan=2, sticky='w', pady=2)
 
         # 延时启动
         delay_frame = tk.LabelFrame(right_frame, text=' 延时启动 ', font=('Microsoft YaHei', 10, 'bold'))
@@ -1201,6 +1280,12 @@ class TerminalApp:
         self.var_server_port.set(cfg.get('server_port', 8080))
         self.var_step.set(cfg.get('volume_step', 10))
         self.var_min_tray.set(cfg.get('minimize_to_tray', False))
+        # 下载目录：支持环境变量展开
+        dl_dir = cfg.get('download_dir', '')
+        if not dl_dir:
+            desktop = os.path.expandvars('%USERPROFILE%\\Desktop')
+            dl_dir = os.path.join(desktop, 'KZC_Received')
+        self.var_download_dir.set(dl_dir)
         if cfg.get('activated'):
             self.lbl_activate.config(text='已激活（永久版）', fg='#27ae60')
         for item in cfg.get('delayed_apps', []):
@@ -1210,6 +1295,11 @@ class TerminalApp:
             self.startup_tree.insert('', 'end', values=(en, item['name'], item.get('delay', 0), item['path']))
 
     # ==================== 音量操作 ====================
+    def _browse_download_dir(self):
+        """浏览选择下载目录"""
+        path = filedialog.askdirectory(title='选择文件接收目录')
+        if path:
+            self.var_download_dir.set(path)
     def _vol_up(self):
         step = self.var_step.get()
         VolumeControl.volume_up(step)
@@ -1416,6 +1506,7 @@ class TerminalApp:
     def _save_settings(self):
         self.config['minimize_to_tray'] = self.var_min_tray.get()
         self.config['volume_step'] = self.var_step.get()
+        self.config['download_dir'] = self.var_download_dir.get()
         save_config(self.config)
         messagebox.showinfo('提示', '设置已保存')
 

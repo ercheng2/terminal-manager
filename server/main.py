@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.2
+坤展成终端管理系统 — 服务器端 v1.3
 基于HTTP轮询通信，更稳定可靠
+支持tkinter桌面GUI + 文件传输功能
 """
 
 import os, sys, json, time, datetime, uuid, threading
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import shutil
 
 # ===== 路径适配 =====
 if getattr(sys, 'frozen', False):
@@ -17,6 +19,10 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DB_FILE = os.path.join(BASE_DIR, 'devices.json')
+UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
+
+# 确保上传目录存在
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ===== 数据存储 =====
 def load_devices():
@@ -34,11 +40,15 @@ def save_devices(data):
 
 
 # ===== FastAPI =====
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
+
 app = FastAPI(title='坤展成终端管理系统')
 
 # 内存中的数据
 _clients = {}  # client_id -> client_info
 _commands = {}  # task_id -> command_info
+_file_transfers = {}  # task_id -> transfer_info
 
 # 加载持久化数据
 def _load_persistent():
@@ -274,6 +284,37 @@ async def client_result(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# ===== 文件下载API =====
+@app.get('/api/file/{filename}')
+async def download_file(filename: str):
+    """提供文件下载（流式传输，支持大文件）"""
+    # 安全检查：禁止路径穿越
+    filename = os.path.basename(filename)
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=400, detail='无效的文件名')
+    
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail='文件不存在')
+    
+    def iter_file():
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(65536)  # 64KB chunks
+                if not chunk:
+                    break
+                yield chunk
+    
+    file_size = os.path.getsize(file_path)
+    return StreamingResponse(
+        iter_file(),
+        media_type='application/octet-stream',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(file_size),
+        }
+    )
+
 
 # ===== 管理界面HTML =====
 MANAGER_HTML = '''<!DOCTYPE html>
@@ -447,17 +488,381 @@ setInterval(refresh, 10000);
 </body>
 </html>'''
 
+
+# ===== Tkinter GUI =====
+class ServerGUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title('坤展成终端管理系统 v2.0 - 服务器端')
+        self.root.geometry('1100x700')
+        self.root.minsize(900, 600)
+        
+        self.selected_client_id = None
+        self._refresh_after_id = None
+        self._last_online_count = 0
+        
+        self._build_ui()
+        self._start_refresh()
+    
+    def _build_ui(self):
+        # 顶部标题栏
+        title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
+        title_frame.pack(fill='x')
+        title_frame.pack_propagate(False)
+        tk.Label(title_frame, text='坤展成终端管理系统 v2.0 - 服务器端',
+                font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
+        tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
+                font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
+        
+        # 主区域：左右分栏
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # 左侧：设备列表面板
+        left_frame = tk.Frame(main_frame, bg='#ecf0f1', width=320)
+        left_frame.pack(side='left', fill='both', padx=(0, 5))
+        left_frame.pack_propagate(False)
+        
+        # 左侧标题
+        tk.Label(left_frame, text='设备列表', font=('Microsoft YaHei', 11, 'bold'),
+                bg='#ecf0f1').pack(pady=(10, 5))
+        
+        # 设备列表容器（带滚动条）
+        list_container = tk.Frame(left_frame, bg='#ecf0f1')
+        list_container.pack(fill='both', expand=True, padx=5)
+        
+        self.canvas = tk.Canvas(list_container, bg='#ecf0f1', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_container, orient='vertical', command=self.canvas.yview)
+        self.device_list_frame = tk.Frame(self.canvas, bg='#ecf0f1')
+        
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.device_list_frame, anchor='nw')
+        
+        self.device_list_frame.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
+        
+        # 右侧：设备详情面板
+        right_frame = tk.Frame(main_frame)
+        right_frame.pack(side='right', fill='both', expand=True)
+        
+        # 详情标题
+        self.detail_title = tk.Label(right_frame, text='请选择左侧设备查看详情',
+                font=('Microsoft YaHei', 12, 'bold'), anchor='w')
+        self.detail_title.pack(fill='x', padx=10, pady=(10, 5))
+        
+        # 基本信息区域
+        info_frame = tk.LabelFrame(right_frame, text=' 基本信息 ', font=('Microsoft YaHei', 10, 'bold'))
+        info_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.info_labels = {}
+        info_grid = tk.Frame(info_frame)
+        info_grid.pack(padx=10, pady=8)
+        fields = [('主机名', 'hostname'), ('IP地址', 'ip'), ('MAC地址', 'mac'),
+                  ('操作系统', 'os'), ('系统版本', 'os_version'), ('架构', 'arch')]
+        for i, (label, key) in enumerate(fields):
+            row, col = i // 2, (i % 2) * 2
+            tk.Label(info_grid, text=f'{label}：', font=('Microsoft YaHei', 9), anchor='e', width=10).grid(row=row, column=col, sticky='e', pady=2)
+            self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=25, relief='sunken', bg='white')
+            self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
+        
+        # 系统状态区域
+        status_frame = tk.LabelFrame(right_frame, text=' 系统状态 ', font=('Microsoft YaHei', 10, 'bold'))
+        status_frame.pack(fill='x', padx=10, pady=5)
+        
+        status_grid = tk.Frame(status_frame)
+        status_grid.pack(padx=10, pady=8)
+        
+        # CPU
+        tk.Label(status_grid, text='CPU使用率：', font=('Microsoft YaHei', 9)).grid(row=0, column=0, sticky='e', pady=3)
+        self.cpu_var = tk.StringVar(value='0%')
+        tk.Label(status_grid, textvariable=self.cpu_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=0, column=1, sticky='w', padx=5)
+        self.cpu_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
+        self.cpu_progress.grid(row=0, column=2, padx=5)
+        
+        # 内存
+        tk.Label(status_grid, text='内存使用率：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='e', pady=3)
+        self.mem_var = tk.StringVar(value='0%')
+        tk.Label(status_grid, textvariable=self.mem_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=1, column=1, sticky='w', padx=5)
+        self.mem_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
+        self.mem_progress.grid(row=1, column=2, padx=5)
+        
+        # 磁盘
+        tk.Label(status_grid, text='磁盘使用率：', font=('Microsoft YaHei', 9)).grid(row=2, column=0, sticky='e', pady=3)
+        self.disk_var = tk.StringVar(value='0%')
+        tk.Label(status_grid, textvariable=self.disk_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=2, column=1, sticky='w', padx=5)
+        self.disk_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
+        self.disk_progress.grid(row=2, column=2, padx=5)
+        
+        # 操作按钮区域
+        btn_frame = tk.LabelFrame(right_frame, text=' 远程控制 ', font=('Microsoft YaHei', 10, 'bold'))
+        btn_frame.pack(fill='x', padx=10, pady=5)
+        
+        btn_grid = tk.Frame(btn_frame)
+        btn_grid.pack(padx=10, pady=8)
+        buttons = [
+            ('关机', '#e74c3c', self._cmd_shutdown),
+            ('重启', '#f39c12', self._cmd_restart),
+            ('音量+', '#3498db', self._cmd_volume_up),
+            ('音量-', '#3498db', self._cmd_volume_down),
+            ('静音', '#3498db', self._cmd_mute),
+            ('取消静音', '#3498db', self._cmd_unmute),
+        ]
+        for i, (text, color, cmd) in enumerate(buttons):
+            row, col = i // 3, i % 3
+            tk.Button(btn_grid, text=text, width=10, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                     command=cmd).grid(row=row, column=col, padx=5, pady=5)
+        
+        # 文件传输区域
+        file_frame = tk.LabelFrame(right_frame, text=' 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
+        file_frame.pack(fill='x', padx=10, pady=5)
+        
+        file_grid = tk.Frame(file_frame)
+        file_grid.pack(padx=10, pady=8)
+        
+        tk.Button(file_grid, text='选择文件', width=10, command=self._select_file).grid(row=0, column=0, padx=5, sticky='w')
+        self.file_path_var = tk.StringVar(value='未选择文件')
+        tk.Label(file_grid, textvariable=self.file_path_var, font=('Microsoft YaHei', 8), anchor='w',
+                bg='white', relief='sunken', width=40).grid(row=0, column=1, padx=5, sticky='ew')
+        tk.Button(file_grid, text='发送文件', width=10, bg='#27ae60', fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                 command=self._send_file).grid(row=0, column=2, padx=5)
+        
+        # 传输状态
+        self.transfer_status_var = tk.StringVar(value='就绪')
+        tk.Label(file_grid, text='状态：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=(5, 0))
+        tk.Label(file_grid, textvariable=self.transfer_status_var, font=('Microsoft YaHei', 9), anchor='w',
+                fg='#27ae60').grid(row=1, column=1, columnspan=2, sticky='w', pady=(5, 0))
+        
+        self.selected_file = None
+        
+        # 底部状态栏
+        status_bar = tk.Frame(self.root, bg='#34495e', height=28)
+        status_bar.pack(fill='x', side='bottom')
+        status_bar.pack_propagate(False)
+        
+        self.lbl_server = tk.Label(status_bar, text='', font=('Microsoft YaHei', 9), fg='white', bg='#34495e', anchor='w')
+        self.lbl_server.pack(side='left', padx=10)
+        self.lbl_online = tk.Label(status_bar, text='', font=('Microsoft YaHei', 9), fg='#2ecc71', bg='#34495e', anchor='w')
+        self.lbl_online.pack(side='left', padx=20)
+        self.lbl_service = tk.Label(status_bar, text='服务运行中', font=('Microsoft YaHei', 9), fg='#2ecc71', bg='#34495e', anchor='w')
+        self.lbl_service.pack(side='right', padx=10)
+    
+    def _start_refresh(self):
+        """启动定时刷新"""
+        self._refresh_devices()
+        self._refresh_after_id = self.root.after(5000, self._start_refresh)
+    
+    def _refresh_devices(self):
+        """刷新设备列表"""
+        # 复制_clients数据，避免线程问题
+        clients_copy = dict(_clients)
+        now = datetime.datetime.now()
+        
+        # 清除现有设备卡片
+        for widget in self.device_list_frame.winfo_children():
+            widget.destroy()
+        
+        online_count = 0
+        for cid, info in clients_copy.items():
+            last_seen = info.get('last_seen', now)
+            if isinstance(last_seen, str):
+                try:
+                    last_seen = datetime.datetime.strptime(last_seen, '%Y-%m-%d %H:%M:%S')
+                except:
+                    last_seen = now - datetime.timedelta(days=1)
+            online = (now - last_seen).total_seconds() < 10
+            
+            if online:
+                online_count += 1
+            
+            # 设备卡片
+            card = tk.Frame(self.device_list_frame, bg='white', relief='raised', bd=1)
+            card.pack(fill='x', padx=5, pady=3)
+            
+            # 选中效果
+            if cid == self.selected_client_id:
+                card.config(bg='#e8f4f8', relief='raised', bd=2)
+            
+            # 图标和状态
+            icon = '🟢' if online else '⚫'
+            hostname = info.get('hostname', '未知')
+            ip = info.get('ip', '')
+            
+            content = f'{icon} {hostname}\n   IP: {ip}'
+            lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
+                          bg='white' if cid != self.selected_client_id else '#e8f4f8',
+                          anchor='w', justify='left')
+            lbl.pack(fill='x', padx=8, pady=5)
+            
+            # 绑定点击事件
+            def on_click(cid=cid):
+                self._select_device(cid)
+            for widget in [card, lbl]:
+                widget.bind('<Button-1>', lambda e, c=cid: on_click(c))
+                widget.bind('<Enter>', lambda e, w=card: w.config(cursor='hand2') if hasattr(w, 'config') else None)
+                widget.bind('<Leave>', lambda e, w=card, orig_bg='white': w.config(bg=orig_bg) if hasattr(w, 'config') else None)
+        
+        # 更新状态栏
+        local_ip = _get_local_ip()
+        self.lbl_server.config(text=f'服务器: {local_ip}:8080')
+        self.lbl_online.config(text=f'在线设备: {online_count}/{len(clients_copy)}')
+        self._last_online_count = online_count
+        
+        # 如果有选中的设备，更新详情
+        if self.selected_client_id and self.selected_client_id in clients_copy:
+            self._update_device_detail(clients_copy[self.selected_client_id])
+    
+    def _select_device(self, cid):
+        """选择设备"""
+        self.selected_client_id = cid
+        self._refresh_devices()  # 重新渲染以显示选中效果
+    
+    def _update_device_detail(self, info):
+        """更新设备详情"""
+        self.detail_title.config(text=f'设备详情 - {info.get("hostname", "未知")}')
+        
+        # 基本信息
+        for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
+                          ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
+            self.info_labels[key].config(text=info.get(key, '-'))
+        
+        # 系统状态
+        cpu = info.get('cpu_percent', 0)
+        mem = info.get('memory_percent', 0)
+        disk = info.get('disk_percent', 0)
+        
+        self.cpu_var.config(text=f'{cpu}%')
+        self.cpu_progress['value'] = cpu
+        self.mem_var.config(text=f'{mem}%')
+        self.mem_progress['value'] = mem
+        self.disk_var.config(text=f'{disk}%')
+        self.disk_progress['value'] = disk
+    
+    def _send_command(self, cmd):
+        """发送命令到选中设备"""
+        if not self.selected_client_id:
+            messagebox.showwarning('提示', '请先选择设备')
+            return
+        
+        import urllib.request
+        import urllib.error
+        
+        try:
+            local_ip = _get_local_ip()
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.selected_client_id],
+                'cmd': cmd
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                messagebox.showinfo('成功', f'指令已发送: {cmd}')
+        except Exception as e:
+            messagebox.showerror('错误', f'发送失败: {e}')
+    
+    def _cmd_shutdown(self):
+        self._send_command('shutdown')
+    
+    def _cmd_restart(self):
+        self._send_command('restart')
+    
+    def _cmd_volume_up(self):
+        self._send_command('volume:up')
+    
+    def _cmd_volume_down(self):
+        self._send_command('volume:down')
+    
+    def _cmd_mute(self):
+        self._send_command('mute')
+    
+    def _cmd_unmute(self):
+        self._send_command('unmute')
+    
+    def _select_file(self):
+        """选择要发送的文件"""
+        path = filedialog.askopenfilename(title='选择要发送的文件')
+        if path:
+            self.selected_file = path
+            self.file_path_var.set(os.path.basename(path))
+    
+    def _send_file(self):
+        """发送文件到选中设备"""
+        if not self.selected_client_id:
+            messagebox.showwarning('提示', '请先选择设备')
+            return
+        
+        if not self.selected_client_id or not self.selected_file:
+            messagebox.showwarning('提示', '请选择文件和目标设备')
+            return
+        
+        import urllib.request
+        import urllib.error
+        
+        try:
+            local_ip = _get_local_ip()
+            
+            # 复制文件到uploads目录
+            filename = os.path.basename(self.selected_file)
+            dest_path = os.path.join(UPLOAD_DIR, filename)
+            shutil.copy2(self.selected_file, dest_path)
+            
+            file_size = os.path.getsize(dest_path)
+            download_url = f'http://{local_ip}:8080/api/file/{filename}'
+            
+            # 发送文件传输指令
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.selected_client_id],
+                'cmd': 'file_transfer',
+                'extra': {
+                    'file_name': filename,
+                    'file_size': file_size,
+                    'download_url': download_url
+                }
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                self.transfer_status_var.config(text=f'发送中: {filename}', fg='#f39c12')
+                messagebox.showinfo('成功', f'文件发送指令已下发: {filename}')
+                self.transfer_status_var.config(text=f'已发送: {filename}', fg='#27ae60')
+        except Exception as e:
+            self.transfer_status_var.config(text=f'发送失败: {e}', fg='#e74c3c')
+            messagebox.showerror('错误', f'发送失败: {e}')
+    
+    def run(self):
+        self.root.mainloop()
+
+
 # ===== 启动 =====
-if __name__ == '__main__':
+def main():
     import uvicorn
+    
+    # 启动UDP广播
+    t_broadcast = threading.Thread(target=_broadcast_server, daemon=True)
+    t_broadcast.start()
+    
+    # 启动FastAPI服务（后台线程）
+    def run_server():
+        uvicorn.run(app, host='0.0.0.0', port=8080, log_level='info')
+    
+    t_server = threading.Thread(target=run_server, daemon=True)
+    t_server.start()
+    
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.2')
+    print('  坤展成终端管理系统 — 服务器端 v1.3')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')
     print('=' * 50)
-    # 启动UDP广播
-    t = threading.Thread(target=_broadcast_server, daemon=True)
-    t.start()
-    uvicorn.run(app, host='0.0.0.0', port=8080)
+    
+    # 启动tkinter GUI
+    gui = ServerGUI()
+    gui.run()
+
+if __name__ == '__main__':
+    main()

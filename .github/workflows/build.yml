@@ -48,7 +48,7 @@ jobs:
       - name: Build server exe
         run: |
           cd server
-          pyinstaller --name "TerminalManager-Server" --onefile --hidden-import uvicorn.logging --hidden-import uvicorn.loops --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols --hidden-import uvicorn.protocols.http --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.lifespan --hidden-import uvicorn.lifespan.on --clean main.py
+          pyinstaller --name "TerminalManager-Server" --onefile --windowed --hidden-import uvicorn.logging --hidden-import uvicorn.loops --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols --hidden-import uvicorn.protocols.http --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.lifespan --hidden-import uvicorn.lifespan.on --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageDraw --clean main.py
       - name: Upload server artifact
         uses: actions/upload-artifact@v4
         with:
@@ -72,7 +72,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2-${{ github.run_number }}
+          tag_name: v1.3-${{ github.run_number }}
           files: |
             release/TerminalManager.exe
             release/TerminalManager-Server.exe

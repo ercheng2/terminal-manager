@@ -866,12 +866,19 @@ class HTTPClient:
         if not self.connected or not self.client_id:
             return
 
-        # 第二步：轮询指令
+        # 第二步：轮询指令（同时上报系统状态）
         try:
-            req = urllib.request.Request(
-                f'{base_url}/api/client/poll?client_id={self.client_id}',
-                method='GET'
+            # 每次轮询都采集最新系统信息
+            fresh_info = SystemInfo.get_info()
+            poll_url = (
+                f'{base_url}/api/client/poll'
+                f'?client_id={self.client_id}'
+                f'&cpu_percent={fresh_info.get("cpu_percent", 0)}'
+                f'&memory_percent={fresh_info.get("memory_percent", 0)}'
+                f'&disk_percent={fresh_info.get("disk_percent", 0)}'
+                f'&ip={fresh_info.get("ip", "")}'
             )
+            req = urllib.request.Request(poll_url, method='GET')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 commands = result.get('commands', [])

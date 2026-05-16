@@ -13,6 +13,14 @@ import urllib.request
 import urllib.error
 import socket
 
+# pystray托盘支持
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_PYSTRAY = True
+except ImportError:
+    HAS_PYSTRAY = False
+
 # Windows注册表支持
 if platform.system() == 'Windows':
     try:
@@ -141,6 +149,70 @@ def _sync_startup_to_registry(startup_items):
                 _write_startup_reg(name, path)
     except Exception as e:
         print(f'[注册表] 同步失败: {e}')
+
+
+# ===== 系统托盘 =====
+_tray_icon = None
+_tray_root_ref = None
+
+def _create_tray_image():
+    """创建托盘图标（16x16蓝色背景K字）"""
+    img = Image.new('RGB', (16, 16), (41, 128, 185))  # 蓝色背景 #2980b9
+    draw = ImageDraw.Draw(img)
+    # 画一个简单的K
+    draw.text((3, 1), 'K', fill='white')
+    return img
+
+def _on_tray_show(icon, item):
+    """显示主窗口"""
+    if _tray_root_ref:
+        _tray_root_ref.after(0, _tray_root_ref.deiconify)
+        _tray_root_ref.after(0, _tray_root_ref.lift)
+
+def _on_tray_quit(icon, item):
+    """真正退出程序"""
+    global _tray_icon
+    if _tray_icon:
+        _tray_icon.stop()
+        _tray_icon = None
+    if _tray_root_ref:
+        _tray_root_ref.after(0, _tray_root_ref.quit)
+
+def _start_tray(root):
+    """启动系统托盘"""
+    global _tray_icon, _tray_root_ref
+    if not HAS_PYSTRAY:
+        print('[托盘] pystray未安装，托盘功能不可用')
+        return
+    try:
+        _tray_root_ref = root
+        menu = pystray.Menu(
+            pystray.MenuItem('显示主窗口', _on_tray_show, default=True),
+            pystray.MenuItem('退出程序', _on_tray_quit),
+        )
+        _tray_icon = pystray.Icon(
+            'kzc_terminal',
+            _create_tray_image(),
+            '坤展成终端管理',
+            menu
+        )
+        # 在独立线程运行托盘
+        t = threading.Thread(target=_tray_icon.run, daemon=True)
+        t.start()
+        print('[托盘] 托盘图标已启动')
+    except Exception as e:
+        print(f'[托盘] 启动失败: {e}')
+
+def _stop_tray():
+    """停止系统托盘"""
+    global _tray_icon
+    if _tray_icon:
+        try:
+            _tray_icon.stop()
+        except:
+            pass
+        _tray_icon = None
+        print('[托盘] 托盘图标已关闭')
 
 
 # ===== 音量控制 =====
@@ -943,6 +1015,12 @@ class TerminalApp:
         if startup_items:
             _sync_startup_to_registry(startup_items)
 
+        # 启动系统托盘
+        _start_tray(self.root)
+        
+        # 记录是否需要启动时最小化到托盘
+        self._start_minimized = self.config.get('minimize_to_tray', False)
+
     def _on_http_command(self, data):
         """HTTP轮询收到指令"""
         self.root.after(0, lambda: self.command_handler.handle(data))
@@ -1376,7 +1454,13 @@ class TerminalApp:
                                fg='#27ae60' if self.http_client.connected else '#f39c12')
         self.root.after(3000, self._refresh_status)
 
+    def _hide_to_tray(self):
+        """隐藏窗口到托盘"""
+        self.root.withdraw()  # 隐藏窗口
+
     def _quit(self):
+        """真正退出程序"""
+        _stop_tray()  # 先停止托盘
         self.http_client.stop()
         self.server_discovery.stop()
         self.control_listener.stop()
@@ -1384,6 +1468,14 @@ class TerminalApp:
         self.root.destroy()
 
     def run(self):
+        # 设置窗口关闭事件处理（点X按钮时隐藏到托盘而不是退出）
+        self.root.protocol('WM_DELETE_WINDOW', self._hide_to_tray)
+        
+        # 如果设置了启动时最小化到托盘，则隐藏窗口
+        if getattr(self, '_start_minimized', False):
+            self.root.after(100, self.root.withdraw)  # 延迟一点隐藏，确保窗口创建完成
+            print('[托盘] 启动时最小化到托盘')
+        
         self.root.mainloop()
 
 

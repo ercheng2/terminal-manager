@@ -268,7 +268,7 @@ async def client_poll(client_id: str, cpu_percent: float = 0, memory_percent: fl
     _clients[client_id]['disk_percent'] = disk_percent
     if ip:
         _clients[client_id]['ip'] = ip
-
+    
     # 获取该客户端的待处理指令
     commands = []
     for tid, cmd in _commands.items():
@@ -745,11 +745,25 @@ class ServerGUI:
         mem = info.get('memory_percent', 0)
         disk = info.get('disk_percent', 0)
         
-        self.cpu_var.config(text=f'{cpu}%')
+        # 转换为数字（可能是字符串）
+        try:
+            cpu = float(cpu)
+        except:
+            cpu = 0
+        try:
+            mem = float(mem)
+        except:
+            mem = 0
+        try:
+            disk = float(disk)
+        except:
+            disk = 0
+        
+        self.cpu_var.config(text=f'{cpu:.1f}%')
         self.cpu_progress['value'] = cpu
-        self.mem_var.config(text=f'{mem}%')
+        self.mem_var.config(text=f'{mem:.1f}%')
         self.mem_progress['value'] = mem
-        self.disk_var.config(text=f'{disk}%')
+        self.disk_var.config(text=f'{disk:.1f}%')
         self.disk_progress['value'] = disk
     
     def _send_command(self, cmd):

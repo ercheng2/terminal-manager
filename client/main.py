@@ -13,6 +13,16 @@ import urllib.request
 import urllib.error
 import socket
 
+# Windows注册表支持
+if platform.system() == 'Windows':
+    try:
+        import winreg
+        HAS_WINREG = True
+    except ImportError:
+        HAS_WINREG = False
+else:
+    HAS_WINREG = False
+
 # ===== 配置管理 =====
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -50,6 +60,87 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+# ===== Windows注册表操作 =====
+REG_RUN_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+
+def _get_run_key():
+    """获取Windows注册表Run键"""
+    if not HAS_WINREG:
+        return None
+    try:
+        return winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_ALL_ACCESS)
+    except WindowsError:
+        return None
+
+def _write_startup_reg(name, path):
+    """写入启动项到注册表"""
+    if not HAS_WINREG:
+        return False
+    try:
+        key = _get_run_key()
+        if key:
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, path)
+            winreg.CloseKey(key)
+            print(f'[注册表] 写入启动项: {name} -> {path}')
+            return True
+    except Exception as e:
+        print(f'[注册表] 写入失败: {e}')
+    return False
+
+def _delete_startup_reg(name):
+    """从注册表删除启动项"""
+    if not HAS_WINREG:
+        return False
+    try:
+        key = _get_run_key()
+        if key:
+            winreg.DeleteValue(key, name)
+            winreg.CloseKey(key)
+            print(f'[注册表] 删除启动项: {name}')
+            return True
+    except FileNotFoundError:
+        # 键不存在，忽略
+        pass
+    except Exception as e:
+        print(f'[注册表] 删除失败: {e}')
+    return False
+
+def _sync_startup_to_registry(startup_items):
+    """同步启动项到注册表（根据enabled状态）"""
+    if not HAS_WINREG:
+        return
+    try:
+        key = _get_run_key()
+        if not key:
+            return
+        # 获取当前注册表中所有值
+        existing = {}
+        i = 0
+        while True:
+            try:
+                n, v, _ = winreg.EnumValue(key, i)
+                existing[n] = v
+                i += 1
+            except OSError:
+                break
+        winreg.CloseKey(key)
+        
+        # 收集应该存在和应该删除的项
+        should_exist = {item['name']: item['path'] for item in startup_items if item.get('enabled', True)}
+        should_delete = set(existing.keys()) - set(should_exist.keys())
+        
+        # 删除不应该存在的项
+        for name in should_delete:
+            _delete_startup_reg(name)
+        
+        # 添加应该存在但还不存在的项
+        for name, path in should_exist.items():
+            if name not in existing:
+                _write_startup_reg(name, path)
+    except Exception as e:
+        print(f'[注册表] 同步失败: {e}')
 
 
 # ===== 音量控制 =====
@@ -835,6 +926,22 @@ class TerminalApp:
         VolumeControl.start_bg_monitor(app=self)
 
         self._refresh_status()
+        
+        # ===== 启动时自动延时启动 =====
+        # 启动delayed_apps中的程序
+        delayed_apps = self.config.get('delayed_apps', [])
+        if delayed_apps:
+            threading.Thread(target=self._auto_start_delayed_apps, args=(delayed_apps,), daemon=True).start()
+        
+        # 启动enabled且delay>0的startup_items
+        startup_items = self.config.get('startup_items', [])
+        startup_with_delay = [item for item in startup_items if item.get('enabled', True) and item.get('delay', 0) > 0]
+        if startup_with_delay:
+            threading.Thread(target=self._auto_start_delayed_apps, args=(startup_with_delay,), daemon=True).start()
+        
+        # 同步启动项到注册表（确保enabled状态的项写入注册表）
+        if startup_items:
+            _sync_startup_to_registry(startup_items)
 
     def _on_http_command(self, data):
         """HTTP轮询收到指令"""
@@ -1144,15 +1251,55 @@ class TerminalApp:
             path = vals[2]
             threading.Thread(target=lambda p=path: os.startfile(p), daemon=True).start()
 
+    def _auto_start_delayed_apps(self, app_list):
+        """自动延时启动列表中的应用（按顺序延时启动）"""
+        print(f'[自动启动] 开始延时启动 {len(app_list)} 个应用')
+        for i, item in enumerate(app_list):
+            delay = item.get('delay', 0)
+            name = item.get('name', '未知')
+            path = item.get('path', '')
+            if i > 0 and delay > 0:
+                print(f'[自动启动] 等待 {delay} 秒后启动 {name}...')
+                time.sleep(delay)
+            elif i == 0 and delay > 0:
+                # 第一个应用也等待延时
+                print(f'[自动启动] 等待 {delay} 秒后启动 {name}...')
+                time.sleep(delay)
+            if path and os.path.exists(path):
+                try:
+                    print(f'[自动启动] 启动 {name}: {path}')
+                    os.startfile(path)
+                except Exception as e:
+                    print(f'[自动启动] 启动失败 {name}: {e}')
+            else:
+                print(f'[自动启动] 路径不存在: {path}')
+
     # ==================== 启动项管理 ====================
     def _add_startup(self):
         path = filedialog.askopenfilename(title='选择启动程序', filetypes=[('程序', '*.exe *.bat *.cmd *.lnk'), ('所有文件', '*.*')])
         if not path:
             return
         name = os.path.basename(path)
-        self.startup_tree.insert('', 'end', values=('✓', name, 0, path))
-        self.config.setdefault('startup_items', []).append({'name': name, 'delay': 0, 'path': path, 'enabled': True})
-        save_config(self.config)
+        # 弹窗设置延时
+        dlg = tk.Toplevel(self.root)
+        dlg.title('设置启动项')
+        dlg.geometry('280x130')
+        dlg.resizable(False, False)
+        tk.Label(dlg, text=f'应用：{name}', font=('Microsoft YaHei', 9)).pack(pady=5)
+        tk.Label(dlg, text='延时启动（秒，0表示立即启动）：', font=('Microsoft YaHei', 9)).pack()
+        var_d = tk.IntVar(value=0)
+        tk.Entry(dlg, textvariable=var_d, width=10).pack(pady=5)
+        def confirm():
+            nonlocal name, path
+            delay = var_d.get()
+            enabled = True
+            self.startup_tree.insert('', 'end', values=('✓', name, delay, path))
+            self.config.setdefault('startup_items', []).append({'name': name, 'delay': delay, 'path': path, 'enabled': enabled})
+            save_config(self.config)
+            # 同步写入注册表
+            _write_startup_reg(name, path)
+            dlg.destroy()
+        tk.Button(dlg, text='确定', command=confirm).pack(pady=5)
 
     def _del_startup(self):
         sel = self.startup_tree.selection()
@@ -1160,8 +1307,11 @@ class TerminalApp:
             return
         for item in sel:
             vals = self.startup_tree.item(item, 'values')
+            name = vals[1]
             self.startup_tree.delete(item)
             self.config['startup_items'] = [a for a in self.config.get('startup_items', []) if not (a['name'] == vals[1] and a['path'] == vals[3])]
+            # 同步从注册表删除
+            _delete_startup_reg(name)
         save_config(self.config)
 
     def _toggle_startup(self):
@@ -1170,11 +1320,18 @@ class TerminalApp:
             return
         for item in sel:
             vals = list(self.startup_tree.item(item, 'values'))
+            name = vals[1]
+            path = vals[3]
             vals[0] = '✗' if vals[0] == '✓' else '✓'
             self.startup_tree.item(item, values=vals)
             for a in self.config.get('startup_items', []):
                 if a['name'] == vals[1] and a['path'] == vals[3]:
                     a['enabled'] = (vals[0] == '✓')
+                    # 同步操作注册表
+                    if a['enabled']:
+                        _write_startup_reg(name, path)
+                    else:
+                        _delete_startup_reg(name)
         save_config(self.config)
 
     # ==================== 保存/激活/退出 ====================

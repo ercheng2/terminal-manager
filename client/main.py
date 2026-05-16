@@ -645,6 +645,8 @@ class PowerControl:
 
 # ===== 系统信息采集 =====
 class SystemInfo:
+    _cpu_inited = False
+
     @staticmethod
     def get_info():
         info = {
@@ -659,17 +661,22 @@ class SystemInfo:
         }
         try:
             import psutil
+            # cpu_percent首次调用返回0，需要先调用一次初始化
+            if not SystemInfo._cpu_inited:
+                psutil.cpu_percent(interval=0)
+                SystemInfo._cpu_inited = True
+                time.sleep(0.1)
+            info['cpu_percent'] = psutil.cpu_percent(interval=0)
             mem = psutil.virtual_memory()
             info['memory_total'] = mem.total
             info['memory_percent'] = mem.percent
-            info['cpu_percent'] = psutil.cpu_percent(interval=0.5)
             try:
                 info['disk_percent'] = psutil.disk_usage('C:\\').percent if platform.system() == 'Windows' else psutil.disk_usage('/').percent
             except:
                 info['disk_percent'] = 0
             info['uptime'] = int(time.time() - psutil.boot_time())
-        except:
-            pass
+        except Exception as e:
+            print(f'[系统信息] psutil采集失败: {e}')
         return info
 
     @staticmethod

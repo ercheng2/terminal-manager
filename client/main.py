@@ -66,6 +66,7 @@ class VolumeControl:
     _app_ref = None
     _helper_exe = None
     _helper_ok = False
+    _status = '未初始化'
 
     @staticmethod
     def _ensure_helper():
@@ -87,9 +88,11 @@ class VolumeControl:
                 if r.stdout.strip().startswith('VOL='):
                     VolumeControl._helper_exe = exe_path
                     VolumeControl._helper_ok = True
+                    VolumeControl._status = f'OK:{r.stdout.strip()}'
                     print(f'[音量] helper验证通过: {r.stdout.strip()}')
                     return True
-            except:
+            except Exception as e:
+                VolumeControl._status = f'test_err:{e}'
                 pass
             # 验证失败，删除
             try:
@@ -111,9 +114,11 @@ class VolumeControl:
                     if out.startswith('VOL='):
                         VolumeControl._helper_exe = exe_path
                         VolumeControl._helper_ok = True
+                        VolumeControl._status = f'bundle_OK:{out}'
                         print(f'[音量] helper从bundle提取成功: {out}')
                         return True
                     else:
+                        VolumeControl._status = f'bundle_fail:{out}'
                         print(f'[音量] bundle helper验证失败: {out}')
                         try:
                             os.remove(exe_path)
@@ -170,6 +175,7 @@ public class K{
                 csc = p
                 break
         if not csc:
+            VolumeControl._status = 'no_csc'
             print('[音量] 未找到csc编译器')
             return False
         try:
@@ -182,6 +188,7 @@ public class K{
                 if out.startswith('VOL='):
                     VolumeControl._helper_exe = exe_path
                     VolumeControl._helper_ok = True
+                    VolumeControl._status = f'compile_OK:{out}'
                     print(f'[音量] 编译+验证成功: {out}')
                     try:
                         os.remove(cs_path)
@@ -189,8 +196,10 @@ public class K{
                         pass
                     return True
                 else:
+                    VolumeControl._status = f'compile_test_fail:{out}'
                     print(f'[音量] 编译后验证失败: {out}')
             else:
+                VolumeControl._status = 'csc_compile_fail'
                 print('[音量] csc编译失败')
         except Exception as e:
             print(f'[音量] 编译异常: {e}')
@@ -232,12 +241,18 @@ public class K{
         VolumeControl._bg_running = False
 
     @staticmethod
+    def get_status():
+        return VolumeControl._status
+
+    @staticmethod
     def _bg_loop():
         VolumeControl._ensure_helper()
         if VolumeControl._helper_ok:
             VolumeControl._read_volume()
+            VolumeControl._status = f'read:{VolumeControl._cached_volume}%'
             print(f'[音量] ★首次读取: {VolumeControl._cached_volume}% 静音={VolumeControl._cached_muted}')
         else:
+            VolumeControl._status = 'fallback:keybd'
             print('[音量] helper不可用，使用keybd_event备用')
         if VolumeControl._app_ref:
             try:
@@ -903,6 +918,8 @@ class TerminalApp:
         self.step_spin.bind('<FocusOut>', lambda e: self._save_step())
         # 回车保存并移走光标
         self.step_spin.bind('<Return>', lambda e: (self._save_step(), self.root.focus_set()))
+        # 点击窗口任意控件时，如果焦点在步长框则移走
+        self.root.bind_all('<Button-1>', self._on_click_anywhere)
         tk.Label(step_frame, text='%').pack(side='left')
         tk.Button(step_frame, text='保存', command=self._save_step).pack(side='left', padx=8)
 
@@ -1035,11 +1052,21 @@ class TerminalApp:
         self.config['volume_step'] = self.var_step.get()
         save_config(self.config)
 
+    def _on_click_anywhere(self, event):
+        """点击窗口任意地方时，如果焦点在步长框且点击的不是步长框，移走光标"""
+        try:
+            if self.root.focus_get() == self.step_spin and event.widget != self.step_spin:
+                self._save_step()
+                self.root.focus_set()
+        except:
+            pass
+
     def _update_volume_display(self):
         vol = VolumeControl.get_volume()
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
-        self.lbl_volume.config(text=f'音量：{vol}%{mute_str}')
+        st = VolumeControl.get_status()
+        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} [{st}]')
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

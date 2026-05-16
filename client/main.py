@@ -373,7 +373,7 @@ class VolumeControl:
 
     @staticmethod
     def _set_volume_com(val):
-        """通过COM设置音量"""
+        """通过COM设置音量，并触发系统音量OSD显示"""
         if not VolumeControl._com_ok or not VolumeControl._vol_ptr:
             return False
         try:
@@ -385,13 +385,34 @@ class VolumeControl:
                 ctypes.HRESULT, ctypes.c_void_p, ctypes.c_float, ctypes.c_void_p
             )(vtbl[7])
             hr = set_vol(vol_ptr, val / 100.0, None)
-            return hr == 0
+            if hr == 0:
+                # 触发系统音量OSD：先发一个音量+再发一个音量-，让系统弹出音量条
+                old_vol = VolumeControl._cached_volume
+                if val < old_vol:
+                    # 音量减了，发VK_VOLUME_DOWN触发OSD
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_DOWN, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_DOWN, 0, 2, 0)
+                    # 音量被减了1，补回来
+                    set_vol(vol_ptr, val / 100.0, None)
+                elif val > old_vol:
+                    # 音量加了，发VK_VOLUME_UP触发OSD
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_UP, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_UP, 0, 2, 0)
+                    # 音量被加了1，补回来
+                    set_vol(vol_ptr, val / 100.0, None)
+                else:
+                    # 音量没变，发VK_VOLUME_UP再VK_VOLUME_DOWN触发OSD
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_UP, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_UP, 0, 2, 0)
+                    set_vol(vol_ptr, val / 100.0, None)
+                return True
+            return False
         except:
             return False
 
     @staticmethod
     def _set_mute_com(mute_flag):
-        """通过COM设置静音"""
+        """通过COM设置静音，并触发系统音量OSD显示"""
         if not VolumeControl._com_ok or not VolumeControl._vol_ptr:
             return False
         try:
@@ -403,7 +424,22 @@ class VolumeControl:
                 ctypes.HRESULT, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
             )(vtbl[14])
             hr = set_mute(vol_ptr, 1 if mute_flag else 0, None)
-            return hr == 0
+            if hr == 0:
+                # 发一次静音键触发系统OSD
+                ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_MUTE, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(VolumeControl.VK_VOLUME_MUTE, 0, 2, 0)
+                # 静音键会切换状态，如果OSD切换后的状态和我们想设的不一致，再设一次
+                time.sleep(0.05)
+                # 读取当前静音状态
+                get_mute = ctypes.WINFUNCTYPE(
+                    ctypes.HRESULT, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+                )(vtbl[15])
+                current = ctypes.c_int()
+                get_mute(vol_ptr, ctypes.byref(current))
+                if current.value != (1 if mute_flag else 0):
+                    set_mute(vol_ptr, 1 if mute_flag else 0, None)
+                return True
+            return False
         except:
             return False
 

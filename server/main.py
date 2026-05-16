@@ -12,6 +12,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import shutil
 
+# --windowed打包后print会报错，重定向到日志文件
+if getattr(sys, 'frozen', False):
+    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'server.log')
+    sys.stdout = open(_log_path, 'a', encoding='utf-8')
+    sys.stderr = sys.stdout
+
 # ===== 路径适配 =====
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))

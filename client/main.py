@@ -13,11 +13,16 @@ import urllib.request
 import urllib.error
 import socket
 
-# --windowed打包后print会报错，重定向到日志文件
+# --windowed打包后print会报错，重定向
 if getattr(sys, 'frozen', False):
-    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'client.log')
-    sys.stdout = open(_log_path, 'a', encoding='utf-8')
-    sys.stderr = sys.stdout
+    try:
+        _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'client.log')
+        _log_file = open(_log_path, 'a', encoding='utf-8')
+        sys.stdout = _log_file
+        sys.stderr = _log_file
+    except:
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = sys.stdout
 
 # pystray托盘支持
 try:
@@ -1413,7 +1418,12 @@ class TerminalApp:
         muted = VolumeControl.is_muted()
         mute_str = ' 已静音' if muted else ' 未静音'
         st = VolumeControl.get_status()
-        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} [{st}]')
+        # 采集系统信息显示在状态栏
+        sys_info = SystemInfo.get_info()
+        cpu = sys_info.get('cpu_percent', '?')
+        mem = sys_info.get('memory_percent', '?')
+        disk = sys_info.get('disk_percent', '?')
+        self.lbl_volume.config(text=f'音量：{vol}%{mute_str} | CPU:{cpu}% MEM:{mem}% DISK:{disk}%')
     # ==================== 电源操作 ====================
     def _shutdown(self):
         if messagebox.askyesno('确认', '确定要关机吗？'):

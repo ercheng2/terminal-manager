@@ -263,12 +263,9 @@ async def client_poll(client_id: str, cpu_percent: float = 0, memory_percent: fl
 
     # 更新最后在线时间和系统状态
     _clients[client_id]['last_seen'] = datetime.datetime.now()
-    if cpu_percent > 0:
-        _clients[client_id]['cpu_percent'] = cpu_percent
-    if memory_percent > 0:
-        _clients[client_id]['memory_percent'] = memory_percent
-    if disk_percent > 0:
-        _clients[client_id]['disk_percent'] = disk_percent
+    _clients[client_id]['cpu_percent'] = cpu_percent
+    _clients[client_id]['memory_percent'] = memory_percent
+    _clients[client_id]['disk_percent'] = disk_percent
     if ip:
         _clients[client_id]['ip'] = ip
 

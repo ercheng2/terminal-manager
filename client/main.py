@@ -13,6 +13,12 @@ import urllib.request
 import urllib.error
 import socket
 
+# --windowed打包后print会报错，重定向到日志文件
+if getattr(sys, 'frozen', False):
+    _log_path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'client.log')
+    sys.stdout = open(_log_path, 'a', encoding='utf-8')
+    sys.stderr = sys.stdout
+
 # pystray托盘支持
 try:
     import pystray
@@ -665,7 +671,7 @@ class SystemInfo:
             if not SystemInfo._cpu_inited:
                 psutil.cpu_percent(interval=0)
                 SystemInfo._cpu_inited = True
-                time.sleep(0.1)
+                time.sleep(0.3)
             info['cpu_percent'] = psutil.cpu_percent(interval=0)
             mem = psutil.virtual_memory()
             info['memory_total'] = mem.total
@@ -675,8 +681,12 @@ class SystemInfo:
             except:
                 info['disk_percent'] = 0
             info['uptime'] = int(time.time() - psutil.boot_time())
+            print(f'[系统信息] psutil正常: CPU={info["cpu_percent"]}% MEM={info["memory_percent"]}% DISK={info["disk_percent"]}%')
         except Exception as e:
             print(f'[系统信息] psutil采集失败: {e}')
+            info['cpu_percent'] = 0
+            info['memory_percent'] = 0
+            info['disk_percent'] = 0
         return info
 
     @staticmethod

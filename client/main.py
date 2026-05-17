@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-45
+坤展成终端管理系统 — 客户端 v1.3-47
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -1098,7 +1098,7 @@ class CommandHandler:
             
             print(f'[文件传输] 下载完成: {dest_path}')
             self.app.http_client.send_result(task_id, 'success', f'文件已保存: {dest_path}')
-            self.app.root.after(0, lambda: self.app._show_msg(f'文件接收完成: {file_name}'))
+            self.app.root.after(0, lambda fn=file_name, dp=dest_path: self.app._show_file_received(fn, dp))
             
         except urllib.error.URLError as e:
             print(f'[文件传输] 下载失败: {e}')
@@ -1115,7 +1115,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-45')
+        self.root.title('坤展成终端管理系统 v1.3-47')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1199,7 +1199,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-45',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-47',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -1451,6 +1451,26 @@ class TerminalApp:
     def _show_msg(self, msg):
         self.lbl_network.config(text=f'通讯：{"已连接" if self.http_client.connected else "未连接"} | {msg}', fg='#2c3e50')
         self.root.after(3000, self._refresh_status)
+    
+    def _show_file_received(self, file_name, dest_path):
+        """显示文件接收完成提示弹窗，3秒自动消失"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title('文件接收完成')
+        dlg.geometry('320x100')
+        dlg.resizable(False, False)
+        dlg.attributes('-topmost', True)
+        # 居中显示
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 320) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 100) // 2
+        dlg.geometry(f'+{x}+{y}')
+        
+        tk.Label(dlg, text='✅ 文件接收完成', font=('Microsoft YaHei', 11, 'bold'), fg='#27ae60').pack(pady=(10, 2))
+        tk.Label(dlg, text=f'{file_name}', font=('Microsoft YaHei', 9), fg='#2c3e50').pack()
+        tk.Label(dlg, text=f'保存至: {dest_path}', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack()
+        
+        # 3秒后自动关闭
+        dlg.after(3000, dlg.destroy)
 
     # ==================== 延时启动 ====================
     def _add_delayed_app(self):

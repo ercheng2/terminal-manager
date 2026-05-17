@@ -924,22 +924,18 @@ class HTTPClient:
         if not self.connected or not self.client_id:
             return
 
-        # 第二步：轮询指令 + 上报系统状态（合并为一个POST请求）
+        # 第二步：轮询指令 + 上报系统状态（GET方式，系统状态通过URL参数传递）
         try:
             fresh_info = SystemInfo.get_info()
-            poll_data = json.dumps({
-                'client_id': self.client_id,
-                'cpu_percent': fresh_info.get('cpu_percent', 0),
-                'memory_percent': fresh_info.get('memory_percent', 0),
-                'disk_percent': fresh_info.get('disk_percent', 0),
-                'ip': fresh_info.get('ip', ''),
-            }).encode('utf-8')
-            req = urllib.request.Request(
-                f'{base_url}/api/client/poll',
-                data=poll_data,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
+            cpu = fresh_info.get('cpu_percent', 0)
+            mem = fresh_info.get('memory_percent', 0)
+            disk = fresh_info.get('disk_percent', 0)
+            client_ip = fresh_info.get('ip', '')
+            
+            # 使用URL参数传递系统状态
+            poll_url = f'{base_url}/api/client/poll?client_id={self.client_id}&cpu_percent={cpu}&memory_percent={mem}&disk_percent={disk}&ip={client_ip}'
+            req = urllib.request.Request(poll_url, method='GET')
+            
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 commands = result.get('commands', [])
@@ -952,6 +948,11 @@ class HTTPClient:
                             self._last_command_ids = set(list(self._last_command_ids)[-50:])
                         if self.on_command:
                             self.on_command(cmd)
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                # 未注册，标记需要重新注册
+                self.client_id = ''
+                print(f'[HTTP] 需要重新注册')
         except Exception as e:
             print(f'[HTTP] 轮询失败: {e}')
 
@@ -1112,7 +1113,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.0')
+        self.root.title('坤展成终端管理系统 v1.3-42')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1196,7 +1197,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.0',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-42',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

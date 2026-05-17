@@ -2,7 +2,7 @@ name: Build Terminal Manager
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
 
 jobs:
   build-client:

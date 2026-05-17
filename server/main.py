@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-41
+坤展成终端管理系统 — 服务器端 v1.3-42
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
 """
@@ -233,83 +233,112 @@ async def client_register(request: Request):
 
         if not client_id:
             client_id = uuid.uuid4().hex[:12]
-
-        _clients[client_id] = {
-            'hostname': hostname,
-            'os': data.get('os', ''),
-            'os_version': data.get('os_version', ''),
-            'ip': ip,
-            'mac': mac,
-            'arch': data.get('arch', ''),
-            'cpu': data.get('cpu', ''),
-            'cpu_percent': data.get('cpu_percent', 0),
-            'memory_percent': data.get('memory_percent', 0),
-            'disk_percent': data.get('disk_percent', 0),
-            'first_seen': data.get('first_seen', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-            'last_seen': datetime.datetime.now(),
-        }
+            # 新客户端，创建完整记录
+            _clients[client_id] = {
+                'hostname': hostname,
+                'os': data.get('os', ''),
+                'os_version': data.get('os_version', ''),
+                'ip': ip,
+                'mac': mac,
+                'arch': data.get('arch', ''),
+                'cpu': data.get('cpu', ''),
+                'cpu_percent': data.get('cpu_percent', 0),
+                'memory_percent': data.get('memory_percent', 0),
+                'disk_percent': data.get('disk_percent', 0),
+                'first_seen': data.get('first_seen', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                'last_seen': datetime.datetime.now(),
+            }
+        else:
+            # 已存在的客户端，只更新时间、IP和系统状态，不覆盖其他字段
+            _clients[client_id]['last_seen'] = datetime.datetime.now()
+            _clients[client_id]['ip'] = ip
+            # 更新系统状态
+            if data.get('cpu_percent') is not None:
+                try:
+                    _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
+                except:
+                    pass
+            if data.get('memory_percent') is not None:
+                try:
+                    _clients[client_id]['memory_percent'] = float(data['memory_percent'])
+                except:
+                    pass
+            if data.get('disk_percent') is not None:
+                try:
+                    _clients[client_id]['disk_percent'] = float(data['disk_percent'])
+                except:
+                    pass
+            print(f'[注册] 更新客户端 {client_id}: cpu={data.get("cpu_percent")}, mem={data.get("memory_percent")}, disk={data.get("disk_percent")}')
 
         _save_persistent()
         return {'client_id': client_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get('/api/client/poll')
+async def client_poll_get(client_id: str, cpu_percent: float = 0, memory_percent: float = 0, disk_percent: float = 0, ip: str = ''):
+    """客户端轮询指令（GET方式，兼容旧客户端）"""
+    print(f'[轮询-GET] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
+    return await _client_poll_impl(client_id, cpu_percent, memory_percent, disk_percent, ip)
 
 @app.post('/api/client/poll')
-async def client_poll(request: Request):
-    """客户端轮询指令 + 上报系统状态（合并为一个POST请求）"""
+async def client_poll_post(request: Request):
+    """客户端轮询指令 + 上报系统状态（POST方式）"""
     try:
         data = await request.json()
         client_id = data.get('client_id', '')
-        if client_id not in _clients:
-            raise HTTPException(status_code=400, detail='未注册')
-        
-        # 更新最后在线时间
-        _clients[client_id]['last_seen'] = datetime.datetime.now()
-        
-        # 更新系统状态
-        if 'cpu_percent' in data:
-            _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
-        if 'memory_percent' in data:
-            _clients[client_id]['memory_percent'] = float(data['memory_percent'])
-        if 'disk_percent' in data:
-            _clients[client_id]['disk_percent'] = float(data['disk_percent'])
-        if data.get('ip'):
-            _clients[client_id]['ip'] = data['ip']
-        
-        # 获取该客户端的待处理指令
-        commands = []
-        for tid, cmd in _commands.items():
-            if cmd.get('target_id') == client_id and cmd.get('status') == 'pending':
-                commands.append(cmd)
-        
-        return {'client_id': client_id, 'commands': commands}
-    except HTTPException:
-        raise
+        cpu_percent = data.get('cpu_percent', 0)
+        memory_percent = data.get('memory_percent', 0)
+        disk_percent = data.get('disk_percent', 0)
+        ip = data.get('ip', '')
+        print(f'[轮询-POST] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
+        return await _client_poll_impl(client_id, cpu_percent, memory_percent, disk_percent, ip)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post('/api/client/status')
-async def client_status(request: Request):
-    """客户端上报系统状态（POST方式，更可靠）"""
-    try:
-        data = await request.json()
-        client_id = data.get('client_id', '')
-        if client_id not in _clients:
-            raise HTTPException(status_code=400, detail='未注册')
-        _clients[client_id]['last_seen'] = datetime.datetime.now()
-        if 'cpu_percent' in data:
-            _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
-        if 'memory_percent' in data:
-            _clients[client_id]['memory_percent'] = float(data['memory_percent'])
-        if 'disk_percent' in data:
-            _clients[client_id]['disk_percent'] = float(data['disk_percent'])
-        if data.get('ip'):
-            _clients[client_id]['ip'] = data['ip']
-        return {'success': True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def _client_poll_impl(client_id, cpu_percent, memory_percent, disk_percent, ip):
+    """轮询指令的内部实现"""
+    if client_id not in _clients:
+        raise HTTPException(status_code=400, detail='未注册')
+    
+    # 更新最后在线时间
+    _clients[client_id]['last_seen'] = datetime.datetime.now()
+    
+    # 更新系统状态
+    updated = []
+    if cpu_percent:
+        try:
+            _clients[client_id]['cpu_percent'] = float(cpu_percent)
+            updated.append(f'cpu={cpu_percent}')
+        except:
+            pass
+    if memory_percent:
+        try:
+            _clients[client_id]['memory_percent'] = float(memory_percent)
+            updated.append(f'mem={memory_percent}')
+        except:
+            pass
+    if disk_percent:
+        try:
+            _clients[client_id]['disk_percent'] = float(disk_percent)
+            updated.append(f'disk={disk_percent}')
+        except:
+            pass
+    if ip:
+        _clients[client_id]['ip'] = ip
+    
+    if updated:
+        print(f'[轮询] 更新 {client_id}: {", ".join(updated)}')
+    
+    # 获取该客户端的待处理指令
+    commands = []
+    for tid, cmd in _commands.items():
+        if cmd.get('target_id') == client_id and cmd.get('status') == 'pending':
+            commands.append(cmd)
+    
+    return {'client_id': client_id, 'commands': commands}
 
 @app.post('/api/client/status')
 async def client_status(request: Request):
@@ -562,7 +591,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-41 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-42 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -578,7 +607,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v2.0 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-42 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -729,12 +758,15 @@ class ServerGUI:
         clients_copy = dict(_clients)
         now = datetime.datetime.now()
         
+        print(f'[GUI] 刷新设备列表，当前{len(clients_copy)}个设备')
+        
         # 清除现有设备卡片
         for widget in self.device_list_frame.winfo_children():
             widget.destroy()
         
         online_count = 0
         for cid, info in clients_copy.items():
+            print(f'[GUI] 设备 {cid}: cpu={info.get("cpu_percent", "N/A")}, mem={info.get("memory_percent", "N/A")}, disk={info.get("disk_percent", "N/A")}')
             last_seen = info.get('last_seen', now)
             if isinstance(last_seen, str):
                 try:

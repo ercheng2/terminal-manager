@@ -741,6 +741,7 @@ class RemoteDesktopViewer:
         self.screen_scale = 1.0
         self.frame_count = 0
         self.fps_timer = time.time()
+        self._last_move_time = 0  # 鼠标移动节流
         
         # 启动截屏拉取线程
         self._fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
@@ -843,17 +844,12 @@ class RemoteDesktopViewer:
         return client_x, client_y
     
     def _send_input(self, input_data):
-        """发送输入指令到客户端"""
+        """直接发送输入指令到客户端5901端口（不走命令队列，低延迟）"""
         try:
-            local_ip = _get_local_ip()
-            url = f'http://{local_ip}:8080/api/command'
-            data = json.dumps({
-                'target_ids': [self.client_id],
-                'cmd': 'remote_input',
-                'extra': input_data
-            }).encode('utf-8')
+            url = f'http://{self.client_ip}:5901/input'
+            data = json.dumps(input_data).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
-            urllib.request.urlopen(req, timeout=2)
+            urllib.request.urlopen(req, timeout=1)
         except:
             pass
     
@@ -874,6 +870,10 @@ class RemoteDesktopViewer:
         self._send_input({'input_type': 'mouse_drag', 'x': x, 'y': y, 'button': 'left'})
     
     def _on_mouse_move(self, event):
+        now = time.time()
+        if now - self._last_move_time < 0.05:  # 50ms节流
+            return
+        self._last_move_time = now
         x, y = self._canvas_to_client(event.x, event.y)
         self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
     

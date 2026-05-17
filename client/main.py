@@ -1091,6 +1091,61 @@ class ScreenHandler(BaseHTTPRequestHandler):
         
         self.send_response(404)
         self.end_headers()
+    
+    def do_POST(self):
+        """处理键鼠输入指令"""
+        if self.path.startswith('/input'):
+            try:
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                input_data = json.loads(body.decode('utf-8'))
+                
+                import pyautogui
+                pyautogui.FAILSAFE = False
+                
+                input_type = input_data.get('input_type', '')
+                
+                if input_type == 'mouse_move':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    pyautogui.moveTo(x, y, _pause=False)
+                elif input_type == 'mouse_click':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    button = input_data.get('button', 'left')
+                    clicks = input_data.get('clicks', 1)
+                    pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
+                elif input_type == 'mouse_drag':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    button = input_data.get('button', 'left')
+                    pyautogui.dragTo(x, y, button=button, _pause=False)
+                elif input_type == 'scroll':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    delta = input_data.get('delta', 0)
+                    pyautogui.scroll(delta, x, y, _pause=False)
+                elif input_type == 'key_press':
+                    key = input_data.get('key', '')
+                    if key:
+                        pyautogui.press(key, _pause=False)
+                elif input_type == 'key_hotkey':
+                    keys = input_data.get('keys', [])
+                    if keys:
+                        pyautogui.hotkey(*keys, _pause=False)
+                elif input_type == 'type_text':
+                    text = input_data.get('text', '')
+                    if text:
+                        pyautogui.typewrite(text, _pause=False)
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'ok'}).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+            return
+        
+        self.send_response(404)
+        self.end_headers()
 
 def start_remote_desktop_server(port=5901):
     """启动远程桌面截屏服务"""

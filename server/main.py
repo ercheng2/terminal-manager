@@ -801,6 +801,11 @@ class RemoteDesktopViewer:
                         raise ConnectionError("Incomplete header")
                     
                     frame_len = struct.unpack('!I', header)[0]
+                    
+                    # 空帧标记（画面没变化）
+                    if frame_len == 0:
+                        continue
+                    
                     if frame_len > 10 * 1024 * 1024:
                         raise ValueError(f"Frame too large: {frame_len}")
                     
@@ -868,7 +873,7 @@ class RemoteDesktopViewer:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.LANCZOS)
+                img = img.resize((new_w, new_h), Image.BILINEAR)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             else:

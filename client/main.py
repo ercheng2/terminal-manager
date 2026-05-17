@@ -1152,20 +1152,52 @@ class ScreenHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def _stream_frames(conn):
-    """TCP流推送——持续推送帧到服务器端"""
+    """TCP流推送——持续推送帧到服务器端（优化版）"""
     import mss
     import socket
     sct = mss.mss()
+    monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+    
+    prev_sample = None  # 上一帧采样，用于增量检测
+    scale = 0.5  # 缩放比例，0.5=半分辨率
+    frame_interval = 0.033  # 目标帧间隔（~30fps上限）
+    last_frame_time = 0
+    
     try:
-        monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
         while True:
+            now = time.time()
+            # 帧率上限控制
+            elapsed = now - last_frame_time
+            if elapsed < frame_interval:
+                time.sleep(frame_interval - elapsed)
+            
             screenshot = sct.grab(monitor)
-            img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+            raw = screenshot.bgra  # 原始BGRA字节
+            
+            # 增量检测：采样比较（每隔1000字节取1个，快速判断画面是否变化）
+            sample = raw[::1000]
+            if prev_sample is not None and sample == prev_sample:
+                # 发送空帧标记（长度=0表示无变化）
+                conn.sendall(struct.pack('!I', 0))
+                continue
+            prev_sample = sample
+            
+            # 转换并缩放
+            img = Image.frombytes('RGB', screenshot.size, raw, 'raw', 'BGRX')
+            
+            if scale < 1.0:
+                new_w = int(img.width * scale)
+                new_h = int(img.height * scale)
+                img = img.resize((new_w, new_h), Image.BILINEAR)
+            
+            # JPEG压缩（fast mode）
             buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=_screen_quality)
+            img.save(buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
             jpeg_data = buf.getvalue()
-            header = struct.pack('!I', len(jpeg_data))
-            conn.sendall(header + jpeg_data)
+            
+            # 发送：4字节长度 + 帧数据
+            conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
+            last_frame_time = time.time()
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     except Exception as e:

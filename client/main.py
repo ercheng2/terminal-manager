@@ -6,7 +6,7 @@
 """
 
 import os, sys, json, time, threading, platform, subprocess, ctypes, queue
-import hashlib, io
+import hashlib, io, struct
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -1008,6 +1008,7 @@ class HTTPClient:
 
 # ===== 远程桌面截屏服务 =====
 _remote_desktop_server = None
+_stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
 _screen_quality = 50
@@ -1133,6 +1134,9 @@ class ScreenHandler(BaseHTTPRequestHandler):
                     text = input_data.get('text', '')
                     if text:
                         pyautogui.typewrite(text, _pause=False)
+                elif input_type == 'set_quality':
+                    global _screen_quality
+                    _screen_quality = input_data.get('quality', 50)
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -1147,6 +1151,60 @@ class ScreenHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+def _stream_frames(conn):
+    """TCP流推送——持续推送帧到服务器端"""
+    import mss
+    import socket
+    sct = mss.mss()
+    try:
+        monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+        while True:
+            screenshot = sct.grab(monitor)
+            img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=_screen_quality)
+            jpeg_data = buf.getvalue()
+            header = struct.pack('!I', len(jpeg_data))
+            conn.sendall(header + jpeg_data)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    except Exception as e:
+        print(f'[远程桌面] 流推送异常: {e}')
+    finally:
+        sct.close()
+        try:
+            conn.close()
+        except:
+            pass
+
+def _stream_server_loop(port):
+    """TCP流服务器——等待服务器端连接后推送帧"""
+    global _stream_server_sock
+    import socket
+    _stream_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _stream_server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    _stream_server_sock.bind(('0.0.0.0', port))
+    _stream_server_sock.listen(1)
+    _stream_server_sock.settimeout(1.0)
+    print(f'[远程桌面] 流推送服务已启动，端口 {port}')
+    
+    while _remote_desktop_server:
+        try:
+            conn, addr = _stream_server_sock.accept()
+            print(f'[远程桌面] 服务器连接: {addr}')
+            t = threading.Thread(target=_stream_frames, args=(conn,), daemon=True)
+            t.start()
+        except socket.timeout:
+            continue
+        except:
+            break
+    
+    try:
+        _stream_server_sock.close()
+    except:
+        pass
+    _stream_server_sock = None
+
 def start_remote_desktop_server(port=5901):
     """启动远程桌面截屏服务"""
     global _remote_desktop_server
@@ -1155,6 +1213,11 @@ def start_remote_desktop_server(port=5901):
         t = threading.Thread(target=_remote_desktop_server.serve_forever, daemon=True)
         t.start()
         print(f'[远程桌面] 截屏服务已启动，端口 {port}')
+        
+        # 同时启动TCP流推送服务
+        t2 = threading.Thread(target=_stream_server_loop, args=(port + 1,), daemon=True)
+        t2.start()
+        
         return True
     except Exception as e:
         print(f'[远程桌面] 截屏服务启动失败: {e}')
@@ -1162,11 +1225,17 @@ def start_remote_desktop_server(port=5901):
 
 def stop_remote_desktop_server():
     """停止远程桌面截屏服务"""
-    global _remote_desktop_server
+    global _remote_desktop_server, _stream_server_sock
     if _remote_desktop_server:
         _remote_desktop_server.shutdown()
         _remote_desktop_server = None
-        print('[远程桌面] 截屏服务已停止')
+    if _stream_server_sock:
+        try:
+            _stream_server_sock.close()
+        except:
+            pass
+        _stream_server_sock = None
+    print('[远程桌面] 服务已停止')
 
 
 # ===== 指令处理 =====

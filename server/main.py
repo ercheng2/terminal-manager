@@ -7,7 +7,7 @@
 v1.4.0: 添加远程桌面控制功能
 """
 
-import os, sys, json, time, datetime, uuid, threading, io, queue
+import os, sys, json, time, datetime, uuid, threading, io, queue, struct
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -700,6 +700,7 @@ class RemoteDesktopViewer:
         # 质量选择
         tk.Label(toolbar, text='画质:', fg='white', bg='#2c3e50', font=('Microsoft YaHei', 9)).pack(side='left', padx=(15, 2))
         self.quality_var = tk.IntVar(value=50)
+        self.quality_var.trace_add('write', lambda *args: self._notify_quality())
         quality_scale = tk.Scale(toolbar, from_=20, to=90, orient='horizontal', 
                                 variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
                                 highlightthickness=0, troughcolor='#34495e')
@@ -765,52 +766,92 @@ class RemoteDesktopViewer:
             return None
     
     def _fetch_loop(self):
-        """持续拉取截图"""
+        """TCP流模式——连接客户端5902端口，接收帧推送"""
+        import socket
+        
         # 先获取屏幕信息
         self._get_screen_info()
-        self.win.after(0, lambda: self.status_var.set('已连接'))
+        
+        # 发送初始画质
+        self._notify_quality()
         
         while self.running:
             try:
-                quality = self.quality_var.get()
-                url = f'http://{self.client_ip}:5901/screen?quality={quality}'
-                if self.last_hash:
-                    url += f'&hash={self.last_hash}'
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((self.client_ip, 5902))
+                sock.settimeout(3)
+                self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
                 
-                req = urllib.request.Request(url)
-                try:
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        if resp.status == 304:
-                            # 画面没变化，跳过
-                            time.sleep(0.03)
+                while self.running:
+                    # 读取4字节帧长度头
+                    header = b''
+                    while len(header) < 4 and self.running:
+                        try:
+                            chunk = sock.recv(4 - len(header))
+                            if not chunk:
+                                raise ConnectionError()
+                            header += chunk
+                        except socket.timeout:
                             continue
-                        
-                        jpeg_data = resp.read()
-                        new_hash = resp.headers.get('X-Hash', '')
-                        if new_hash:
-                            self.last_hash = new_hash
-                        
-                        # 更新FPS
-                        self.frame_count += 1
-                        now = time.time()
-                        if now - self.fps_timer >= 1.0:
-                            fps = self.frame_count / (now - self.fps_timer)
-                            self.win.after(0, lambda f=fps: self.fps_var.set(f'FPS: {f:.1f}'))
-                            self.frame_count = 0
-                            self.fps_timer = now
-                        
-                        # 在GUI线程显示
-                        self.win.after(0, lambda data=jpeg_data: self._display_frame(data))
-                except urllib.error.HTTPError as e:
-                    if e.code == 304:
-                        time.sleep(0.03)
-                        continue
-                    raise
+                    
+                    if not self.running:
+                        break
+                    if len(header) < 4:
+                        raise ConnectionError("Incomplete header")
+                    
+                    frame_len = struct.unpack('!I', header)[0]
+                    if frame_len > 10 * 1024 * 1024:
+                        raise ValueError(f"Frame too large: {frame_len}")
+                    
+                    # 读取帧数据
+                    frame_data = b''
+                    while len(frame_data) < frame_len and self.running:
+                        try:
+                            chunk = sock.recv(min(frame_len - len(frame_data), 65536))
+                            if not chunk:
+                                raise ConnectionError()
+                            frame_data += chunk
+                        except socket.timeout:
+                            continue
+                    
+                    if not self.running:
+                        break
+                    if len(frame_data) < frame_len:
+                        raise ConnectionError("Incomplete frame")
+                    
+                    # 更新FPS
+                    self.frame_count += 1
+                    now = time.time()
+                    if now - self.fps_timer >= 1.0:
+                        fps = self.frame_count / (now - self.fps_timer)
+                        self.win.after(0, lambda f=fps: self.fps_var.set(f'FPS: {f:.1f}'))
+                        self.frame_count = 0
+                        self.fps_timer = now
+                    
+                    # 在GUI线程显示
+                    self.win.after(0, lambda data=frame_data: self._display_frame(data))
+                
             except Exception as e:
                 if not self.running:
                     break
-                self.win.after(0, lambda: self.status_var.set(f'连接中断: {e}'))
-                time.sleep(1)
+                self.win.after(0, lambda: self.status_var.set(f'连接中断，重连中...'))
+                time.sleep(2)
+                try:
+                    sock.close()
+                except:
+                    pass
+    
+    def _notify_quality(self):
+        """通知客户端画质设置"""
+        try:
+            quality = self.quality_var.get()
+            url = f'http://{self.client_ip}:5901/input'
+            data = json.dumps({'input_type': 'set_quality', 'quality': quality}).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            urllib.request.urlopen(req, timeout=1)
+        except:
+            pass
     
     def _display_frame(self, jpeg_data):
         """显示截图帧"""

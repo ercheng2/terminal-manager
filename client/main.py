@@ -1201,6 +1201,7 @@ def _stream_server_loop(port):
     import socket
     _stream_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     _stream_server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    _stream_server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     _stream_server_sock.bind(('0.0.0.0', port))
     _stream_server_sock.listen(1)
     _stream_server_sock.settimeout(1.0)
@@ -1209,6 +1210,7 @@ def _stream_server_loop(port):
     while _remote_desktop_server:
         try:
             conn, addr = _stream_server_sock.accept()
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             print(f'[远程桌面] 服务器连接: {addr}')
             t = threading.Thread(target=_stream_frames, args=(conn,), daemon=True)
             t.start()

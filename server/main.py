@@ -699,7 +699,7 @@ class RemoteDesktopViewer:
         
         # 质量选择
         tk.Label(toolbar, text='画质:', fg='white', bg='#2c3e50', font=('Microsoft YaHei', 9)).pack(side='left', padx=(15, 2))
-        self.quality_var = tk.IntVar(value=50)
+        self.quality_var = tk.IntVar(value=75)
         self.quality_var.trace_add('write', lambda *args: self._notify_quality())
         quality_scale = tk.Scale(toolbar, from_=20, to=90, orient='horizontal', 
                                 variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
@@ -743,6 +743,8 @@ class RemoteDesktopViewer:
         self.frame_count = 0
         self.fps_timer = time.time()
         self._last_move_time = 0  # 鼠标移动节流
+        self._displaying = False  # 跳帧标志：正在显示时跳过新帧
+        self._pending_frame = None  # 最新待显示帧
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
@@ -778,6 +780,7 @@ class RemoteDesktopViewer:
         while self.running:
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.settimeout(5)
                 sock.connect((self.client_ip, 5902))
                 sock.settimeout(3)
@@ -834,8 +837,11 @@ class RemoteDesktopViewer:
                         self.frame_count = 0
                         self.fps_timer = now
                     
-                    # 在GUI线程显示
-                    self.win.after(0, lambda data=frame_data: self._display_frame(data))
+                    # 只保留最新帧，跳过中间帧
+                    self._pending_frame = frame_data
+                    if not self._displaying:
+                        self._displaying = True
+                        self.win.after(0, self._show_pending_frame)
                 
             except Exception as e:
                 if not self.running:
@@ -857,6 +863,18 @@ class RemoteDesktopViewer:
             urllib.request.urlopen(req, timeout=1)
         except:
             pass
+    
+    def _show_pending_frame(self):
+        """显示最新待显示帧（跳帧机制，只显示最新帧）"""
+        frame_data = self._pending_frame
+        self._pending_frame = None
+        if frame_data:
+            self._display_frame(frame_data)
+        # 检查是否有更新的帧
+        if self._pending_frame:
+            self.win.after(1, self._show_pending_frame)
+        else:
+            self._displaying = False
     
     def _display_frame(self, jpeg_data):
         """显示截图帧"""

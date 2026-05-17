@@ -14,7 +14,7 @@ from tkinter import ttk, messagebox, filedialog
 import shutil
 import urllib.request
 import urllib.error
-from PIL import ImageTk
+from PIL import Image, ImageTk
 
 def resource_path(relative_path):
     """获取资源文件绝对路径（兼容PyInstaller打包）"""

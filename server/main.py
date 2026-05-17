@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-52
+坤展成终端管理系统 — 服务器端 v1.3-53
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-52: 发送提示改状态栏+设备在线绿色+移除调试面板
+v1.3-53: 发送提示改状态栏+设备在线绿色+移除调试面板
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -650,7 +650,7 @@ class ServerGUI:
         icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
-        self.root.title('坤展成终端管理系统 v1.3-52 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-53 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -666,10 +666,28 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-52 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-53 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
+        
+        # 统计卡片区域
+        stats_frame = tk.Frame(self.root, bg='#ecf0f1')
+        stats_frame.pack(fill='x', padx=5, pady=(5, 0))
+        
+        card_data = [
+            ('在线设备', '#27ae60', 'stat_online'),
+            ('离线设备', '#e74c3c', 'stat_offline'),
+            ('设备总数', '#3498db', 'stat_total'),
+        ]
+        self.stat_vars = {}
+        for text, color, key in card_data:
+            card = tk.Frame(stats_frame, bg=color, padx=20, pady=8)
+            card.pack(side='left', expand=True, fill='x', padx=3)
+            var = tk.StringVar(value='0')
+            self.stat_vars[key] = var
+            tk.Label(card, textvariable=var, font=('Microsoft YaHei', 18, 'bold'), fg='white', bg=color).pack()
+            tk.Label(card, text=text, font=('Microsoft YaHei', 9), fg='white', bg=color).pack()
         
         # 主区域：左右分栏
         main_frame = tk.Frame(self.root)
@@ -881,6 +899,13 @@ class ServerGUI:
         self.lbl_online.config(text=f'在线设备: {online_count}/{len(clients_copy)}')
         self._last_online_count = online_count
         
+        # 更新统计卡片
+        total = len(clients_copy)
+        offline_count = total - online_count
+        self.stat_vars['stat_online'].set(str(online_count))
+        self.stat_vars['stat_offline'].set(str(offline_count))
+        self.stat_vars['stat_total'].set(str(total))
+        
         # 如果有选中的设备，更新详情
         if self.selected_client_id and self.selected_client_id in _clients:
             self._update_device_detail()
@@ -1083,7 +1108,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-52')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-53')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

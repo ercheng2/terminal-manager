@@ -1,3 +1,6 @@
 pystray
 Pillow
 psutil
+mss
+pyautogui
+python-xlib

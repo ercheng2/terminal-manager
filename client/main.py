@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-58
+坤展成终端管理系统 — 客户端 v1.4.0
 基于HTTP轮询通信，更稳定可靠
 """
 
 import os, sys, json, time, threading, platform, subprocess, ctypes, queue
+import hashlib, io
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
@@ -1004,6 +1006,114 @@ class HTTPClient:
             print(f'[HTTP] 发送结果失败: {e}')
 
 
+# ===== 远程桌面截屏服务 =====
+_remote_desktop_server = None
+_last_screen_hash = None
+_last_screen_jpeg = None
+_screen_quality = 50
+
+class ScreenHandler(BaseHTTPRequestHandler):
+    """截屏HTTP请求处理器"""
+    
+    def log_message(self, format, *args):
+        pass  # 静默日志
+    
+    def do_GET(self):
+        global _last_screen_hash, _last_screen_jpeg, _screen_quality
+        
+        if self.path.startswith('/screen_info'):
+            # 返回屏幕分辨率
+            try:
+                import mss
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                    info = json.dumps({'width': monitor['width'], 'height': monitor['height']})
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(info.encode())
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+            return
+        
+        if self.path.startswith('/screen'):
+            try:
+                import mss
+                # 解析参数
+                quality = _screen_quality
+                check_hash = None
+                if '?' in self.path:
+                    params = self.path.split('?', 1)[1]
+                    for p in params.split('&'):
+                        if p.startswith('quality='):
+                            quality = int(p.split('=')[1])
+                        if p.startswith('hash='):
+                            check_hash = p.split('=')[1]
+                
+                # 截屏
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                    screenshot = sct.grab(monitor)
+                    img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+                
+                # 压缩为JPEG
+                buf = io.BytesIO()
+                img.save(buf, format='JPEG', quality=quality)
+                jpeg_data = buf.getvalue()
+                
+                # 计算hash用于增量判断
+                current_hash = hashlib.md5(jpeg_data).hexdigest()[:12]
+                
+                # 如果hash相同，返回304
+                if check_hash and check_hash == current_hash:
+                    self.send_response(304)
+                    self.send_header('X-Hash', current_hash)
+                    self.end_headers()
+                    return
+                
+                _last_screen_hash = current_hash
+                _last_screen_jpeg = jpeg_data
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(jpeg_data)))
+                self.send_header('X-Hash', current_hash)
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(jpeg_data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'Screen capture error: {e}'.encode())
+            return
+        
+        self.send_response(404)
+        self.end_headers()
+
+def start_remote_desktop_server(port=5901):
+    """启动远程桌面截屏服务"""
+    global _remote_desktop_server
+    try:
+        _remote_desktop_server = HTTPServer(('0.0.0.0', port), ScreenHandler)
+        t = threading.Thread(target=_remote_desktop_server.serve_forever, daemon=True)
+        t.start()
+        print(f'[远程桌面] 截屏服务已启动，端口 {port}')
+        return True
+    except Exception as e:
+        print(f'[远程桌面] 截屏服务启动失败: {e}')
+        return False
+
+def stop_remote_desktop_server():
+    """停止远程桌面截屏服务"""
+    global _remote_desktop_server
+    if _remote_desktop_server:
+        _remote_desktop_server.shutdown()
+        _remote_desktop_server = None
+        print('[远程桌面] 截屏服务已停止')
+
+
 # ===== 指令处理 =====
 class CommandHandler:
     def __init__(self, app):
@@ -1056,6 +1166,50 @@ class CommandHandler:
             script_type = data.get('script_type', 'bat')
             res = PowerControl.run_script(script, script_type)
             result = {'status': 'success' if res['success'] else 'failed', 'msg': res.get('output', '') or res.get('error', '')}
+        elif cmd == 'start_remote_desktop':
+            port = data.get('port', 5901)
+            ok = start_remote_desktop_server(port)
+            result = {'status': 'success' if ok else 'failed', 'msg': f'远程桌面服务已启动:{port}' if ok else '远程桌面服务启动失败'}
+        elif cmd == 'stop_remote_desktop':
+            stop_remote_desktop_server()
+            result = {'status': 'success', 'msg': '远程桌面服务已停止'}
+        elif cmd == 'remote_input':
+            # 远程输入指令
+            import pyautogui
+            pyautogui.FAILSAFE = False
+            input_type = data.get('input_type', '')
+            try:
+                if input_type == 'mouse_move':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    pyautogui.moveTo(x, y, _pause=False)
+                elif input_type == 'mouse_click':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    button = data.get('button', 'left')
+                    clicks = data.get('clicks', 1)
+                    pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
+                elif input_type == 'mouse_drag':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    button = data.get('button', 'left')
+                    pyautogui.dragTo(x, y, button=button, _pause=False)
+                elif input_type == 'scroll':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    delta = data.get('delta', 0)
+                    pyautogui.scroll(delta, x, y, _pause=False)
+                elif input_type == 'key_press':
+                    key = data.get('key', '')
+                    if key:
+                        pyautogui.press(key, _pause=False)
+                elif input_type == 'key_hotkey':
+                    keys = data.get('keys', [])
+                    if keys:
+                        pyautogui.hotkey(*keys, _pause=False)
+                elif input_type == 'type_text':
+                    text = data.get('text', '')
+                    if text:
+                        pyautogui.typewrite(text, _pause=False)
+                result = {'status': 'success', 'msg': f'输入已执行: {input_type}'}
+            except Exception as e:
+                result = {'status': 'failed', 'msg': f'输入执行失败: {e}'}
         elif cmd == 'file_transfer':
             # 文件传输指令
             file_name = data.get('extra', {}).get('file_name', '')
@@ -1143,7 +1297,7 @@ class TerminalApp:
         icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
-        self.root.title('坤展成终端管理系统 v1.3-58')
+        self.root.title('坤展成终端管理系统 v1.4.0')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-58
+坤展成终端管理系统 — 服务器端 v1.4.0
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-58: 设备列表添加编辑名称功能
+v1.4.0: 添加远程桌面控制功能
 """
 
-import os, sys, json, time, datetime, uuid, threading
+import os, sys, json, time, datetime, uuid, threading, io
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import shutil
+import urllib.request
+import urllib.error
+from PIL import ImageTk
 
 def resource_path(relative_path):
     """获取资源文件绝对路径（兼容PyInstaller打包）"""
@@ -666,6 +669,251 @@ setInterval(refresh, 10000);
 </html>'''
 
 
+# ===== 远程桌面查看器 =====
+class RemoteDesktopViewer:
+    """远程桌面查看器"""
+    
+    def __init__(self, parent, client_ip, client_id, server_ip):
+        self.client_ip = client_ip
+        self.client_id = client_id
+        self.server_ip = server_ip
+        self.running = True
+        self.last_hash = None
+        self.screen_scale = 1.0
+        self.client_screen_size = None
+        self.offset_x = 0
+        self.offset_y = 0
+        self.current_img = None
+        
+        # 创建查看器窗口
+        self.win = tk.Toplevel(parent)
+        self.win.title(f'远程桌面 - {client_ip}')
+        self.win.geometry('1024x700')
+        self.win.protocol('WM_DELETE_WINDOW', self._on_close)
+        
+        # 工具栏
+        toolbar = tk.Frame(self.win, bg='#2c3e50')
+        toolbar.pack(fill='x')
+        tk.Label(toolbar, text=f'  远程桌面: {client_ip}', font=('Microsoft YaHei', 10, 'bold'), 
+                fg='white', bg='#2c3e50').pack(side='left', padx=5)
+        
+        # 质量选择
+        tk.Label(toolbar, text='画质:', fg='white', bg='#2c3e50', font=('Microsoft YaHei', 9)).pack(side='left', padx=(15, 2))
+        self.quality_var = tk.IntVar(value=50)
+        quality_scale = tk.Scale(toolbar, from_=20, to=90, orient='horizontal', 
+                                variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
+                                highlightthickness=0, troughcolor='#34495e')
+        quality_scale.pack(side='left')
+        
+        # 断开按钮
+        tk.Button(toolbar, text='断开', bg='#e74c3c', fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                 command=self._on_close).pack(side='right', padx=10, pady=3)
+        
+        # FPS显示
+        self.fps_var = tk.StringVar(value='FPS: --')
+        tk.Label(toolbar, textvariable=self.fps_var, fg='#2ecc71', bg='#2c3e50', 
+                font=('Consolas', 9)).pack(side='right', padx=10)
+        
+        # 画面显示区域
+        self.canvas = tk.Canvas(self.win, bg='#1a1a2e', highlightthickness=0)
+        self.canvas.pack(fill='both', expand=True)
+        
+        # 状态提示
+        self.status_var = tk.StringVar(value='正在连接...')
+        tk.Label(self.win, textvariable=self.status_var, font=('Microsoft YaHei', 9), 
+                bg='#ecf0f1', anchor='w').pack(fill='x')
+        
+        # 绑定键鼠事件
+        self.canvas.bind('<Button-1>', self._on_mouse_click)
+        self.canvas.bind('<Button-3>', self._on_mouse_right_click)
+        self.canvas.bind('<Double-Button-1>', self._on_mouse_double_click)
+        self.canvas.bind('<B1-Motion>', self._on_mouse_drag)
+        self.canvas.bind('<Motion>', self._on_mouse_move)
+        self.canvas.bind('<MouseWheel>', self._on_scroll)
+        self.canvas.bind('<Key>', self._on_key_press)
+        self.canvas.focus_set()
+        
+        # 当前显示的图片
+        self.current_photo = None
+        self.frame_count = 0
+        self.fps_timer = time.time()
+        
+        # 启动截屏拉取线程
+        self._fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
+        self._fetch_thread.start()
+    
+    def _get_screen_info(self):
+        """获取客户端屏幕分辨率"""
+        try:
+            url = f'http://{self.client_ip}:5901/screen_info'
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                info = json.loads(resp.read().decode())
+                self.client_screen_size = info
+                return info
+        except:
+            return None
+    
+    def _fetch_loop(self):
+        """持续拉取截图"""
+        # 先获取屏幕信息
+        self._get_screen_info()
+        self.win.after(0, lambda: self.status_var.set('已连接'))
+        
+        while self.running:
+            try:
+                quality = self.quality_var.get()
+                url = f'http://{self.client_ip}:5901/screen?quality={quality}'
+                if self.last_hash:
+                    url += f'&hash={self.last_hash}'
+                
+                req = urllib.request.Request(url)
+                try:
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        if resp.status == 304:
+                            # 画面没变化，跳过
+                            time.sleep(0.03)
+                            continue
+                        
+                        jpeg_data = resp.read()
+                        new_hash = resp.headers.get('X-Hash', '')
+                        if new_hash:
+                            self.last_hash = new_hash
+                        
+                        # 更新FPS
+                        self.frame_count += 1
+                        now = time.time()
+                        if now - self.fps_timer >= 1.0:
+                            fps = self.frame_count / (now - self.fps_timer)
+                            self.win.after(0, lambda f=fps: self.fps_var.set(f'FPS: {f:.1f}'))
+                            self.frame_count = 0
+                            self.fps_timer = now
+                        
+                        # 在GUI线程显示
+                        self.win.after(0, lambda data=jpeg_data: self._display_frame(data))
+                except urllib.error.HTTPError as e:
+                    if e.code == 304:
+                        time.sleep(0.03)
+                        continue
+                    raise
+            except Exception as e:
+                if not self.running:
+                    break
+                self.win.after(0, lambda: self.status_var.set(f'连接中断: {e}'))
+                time.sleep(1)
+    
+    def _display_frame(self, jpeg_data):
+        """显示截图帧"""
+        try:
+            img = Image.open(io.BytesIO(jpeg_data))
+            self.current_img = img  # 保持引用
+            
+            # 缩放适配Canvas大小
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            if cw > 1 and ch > 1:
+                iw, ih = img.size
+                self.screen_scale = min(cw / iw, ch / ih)
+                new_w = int(iw * self.screen_scale)
+                new_h = int(ih * self.screen_scale)
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+                self.offset_x = (cw - new_w) // 2
+                self.offset_y = (ch - new_h) // 2
+            
+            self.current_photo = ImageTk.PhotoImage(img)
+            self.canvas.delete('all')
+            self.canvas.create_image(self.offset_x, self.offset_y, anchor='nw', image=self.current_photo)
+        except Exception as e:
+            pass
+    
+    def _canvas_to_client(self, cx, cy):
+        """将Canvas坐标转换为客户端屏幕坐标"""
+        client_x = int((cx - self.offset_x) / self.screen_scale)
+        client_y = int((cy - self.offset_y) / self.screen_scale)
+        return client_x, client_y
+    
+    def _send_input(self, input_data):
+        """发送输入指令到客户端"""
+        try:
+            local_ip = _get_local_ip()
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.client_id],
+                'cmd': 'remote_input',
+                'extra': input_data
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            urllib.request.urlopen(req, timeout=2)
+        except:
+            pass
+    
+    def _on_mouse_click(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'left', 'clicks': 1})
+    
+    def _on_mouse_right_click(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'right', 'clicks': 1})
+    
+    def _on_mouse_double_click(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'left', 'clicks': 2})
+    
+    def _on_mouse_drag(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_drag', 'x': x, 'y': y, 'button': 'left'})
+    
+    def _on_mouse_move(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
+    
+    def _on_scroll(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        delta = event.delta // 120
+        self._send_input({'input_type': 'scroll', 'x': x, 'y': y, 'delta': delta})
+    
+    def _on_key_press(self, event):
+        # 简单按键映射
+        key = event.keysym
+        # 映射特殊键
+        key_map = {'Return': 'enter', 'BackSpace': 'backspace', 'Escape': 'escape',
+                   'Tab': 'tab', 'space': 'space', 'Delete': 'delete',
+                   'Left': 'left', 'Right': 'right', 'Up': 'up', 'Down': 'down',
+                   'Home': 'home', 'End': 'end', 'Prior': 'pageup', 'Next': 'pagedown'}
+        mapped_key = key_map.get(key, key)
+        
+        # 处理组合键
+        modifiers = []
+        if event.state & 0x1:  # Shift
+            modifiers.append('shift')
+        if event.state & 0x4:  # Ctrl
+            modifiers.append('ctrl')
+        if event.state & 0x8:  # Alt
+            modifiers.append('alt')
+        
+        if modifiers and len(mapped_key) == 1:
+            self._send_input({'input_type': 'key_hotkey', 'keys': modifiers + [mapped_key]})
+        else:
+            self._send_input({'input_type': 'key_press', 'key': mapped_key})
+    
+    def _on_close(self):
+        """关闭查看器"""
+        self.running = False
+        # 发送停止指令
+        try:
+            local_ip = _get_local_ip()
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.client_id],
+                'cmd': 'stop_remote_desktop'
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            urllib.request.urlopen(req, timeout=2)
+        except:
+            pass
+        self.win.destroy()
+
+
 # ===== Tkinter GUI =====
 class ServerGUI:
     def __init__(self):
@@ -689,7 +937,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-53 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.4.0 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -812,6 +1060,7 @@ class ServerGUI:
             ('音量-', '#3498db', self._cmd_volume_down),
             ('静音', '#3498db', self._cmd_mute),
             ('取消静音', '#3498db', self._cmd_unmute),
+            ('远程桌面', '#8e44ad', self._cmd_remote_desktop),
         ]
         for i, (text, color, cmd) in enumerate(buttons):
             row, col = i // 3, i % 3
@@ -1165,6 +1414,48 @@ class ServerGUI:
     
     def _cmd_unmute(self):
         self._send_command('unmute')
+    
+    def _cmd_remote_desktop(self):
+        """启动远程桌面"""
+        if not self.selected_client_id:
+            self.cmd_status_var.set('⚠️ 请先选择设备')
+            self.cmd_status_label.config(fg='#f39c12')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+            return
+        
+        client_info = _clients.get(self.selected_client_id, {})
+        client_ip = client_info.get('ip', '')
+        if not client_ip:
+            self.cmd_status_var.set('⚠️ 无法获取设备IP')
+            self.cmd_status_label.config(fg='#f39c12')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+            return
+        
+        # 发送启动远程桌面指令
+        try:
+            local_ip = _get_local_ip()
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.selected_client_id],
+                'cmd': 'start_remote_desktop',
+                'extra': {'port': 5901}
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+            
+            # 等待客户端服务启动
+            time.sleep(1)
+            
+            # 打开查看器
+            RemoteDesktopViewer(self.root, client_ip, self.selected_client_id, local_ip)
+            self.cmd_status_var.set('✅ 远程桌面已启动')
+            self.cmd_status_label.config(fg='#27ae60')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+        except Exception as e:
+            self.cmd_status_var.set(f'❌ 远程桌面启动失败: {e}')
+            self.cmd_status_label.config(fg='#e74c3c')
+            self.root.after(5000, lambda: self.cmd_status_var.set(''))
     
     def _select_file(self):
         """选择要发送的文件"""

@@ -897,19 +897,25 @@ class ServerGUI:
             if cid == self.selected_client_id:
                 card.config(relief='raised', bd=2)
             
-            # 图标和状态
-            icon = '🟢' if online else '⚫'
+            # 设备信息
             hostname = info.get('hostname', '未知')
             ip = info.get('ip', '')
             # 优先使用自定义名称
             alias = _device_alias.get(cid, '')
             display_name = f'{alias}（{hostname}）' if alias else hostname
             
-            content = f'{icon} {display_name}\n   IP: {ip}'
+            # 左侧状态圆点（Canvas）
+            dot_canvas = tk.Canvas(card, width=14, height=14, bg=card_bg, highlightthickness=0)
+            dot_canvas.pack(side='left', padx=(8, 2), pady=5)
+            dot_color = '#27ae60' if online else '#95a5a6'
+            dot_canvas.create_oval(2, 2, 12, 12, fill=dot_color, outline='')
+            
+            # 文字标签
+            content = f'{display_name}\nIP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
-            lbl.pack(side='left', fill='x', padx=(8, 0), pady=5)
+            lbl.pack(side='left', fill='x', padx=(0, 0), pady=5)
             
             # 编辑按钮
             edit_btn = tk.Label(card, text='✏️', font=('Microsoft YaHei', 10), 
@@ -923,14 +929,14 @@ class ServerGUI:
             # 绑定点击事件
             def on_click(cid=cid):
                 self._select_device(cid)
-            for widget in [card, lbl]:
+            for widget in [card, lbl, dot_canvas]:
                 widget.bind('<Button-1>', lambda e, c=cid: on_click(c))
                 widget.bind('<Enter>', lambda e, w=card: w.config(cursor='hand2') if hasattr(w, 'config') else None)
-                widget.bind('<Leave>', lambda e, w=card, eb=edit_btn, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg)) if hasattr(w, 'config') else None)
+                widget.bind('<Leave>', lambda e, w=card, eb=edit_btn, dc=dot_canvas, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), dc.config(bg=orig_bg)) if hasattr(w, 'config') else None)
             
             # edit_btn 悬停效果
             edit_btn.bind('<Enter>', lambda e, w=card, eb=edit_btn: (w.config(cursor='hand2'), eb.config(bg='#f0f0f0')))
-            edit_btn.bind('<Leave>', lambda e, w=card, eb=edit_btn, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg)))
+            edit_btn.bind('<Leave>', lambda e, w=card, eb=edit_btn, dc=dot_canvas, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), dc.config(bg=orig_bg)))
         
         # 更新状态栏
         local_ip = _get_local_ip()

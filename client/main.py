@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-48
+坤展成终端管理系统 — 客户端 v1.3-49
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -1039,9 +1039,10 @@ class CommandHandler:
             file_name = data.get('extra', {}).get('file_name', '')
             file_size = data.get('extra', {}).get('file_size', 0)
             download_url = data.get('extra', {}).get('download_url', '')
+            server_file_name = data.get('extra', {}).get('server_file_name', '')
             if file_name and download_url:
                 # 在后台线程下载文件
-                threading.Thread(target=self._download_file, args=(task_id, file_name, file_size, download_url), daemon=True).start()
+                threading.Thread(target=self._download_file, args=(task_id, file_name, file_size, download_url, server_file_name), daemon=True).start()
                 result = {'status': 'pending', 'msg': f'正在接收文件: {file_name}'}
             else:
                 result = {'status': 'failed', 'msg': '文件传输参数不完整'}
@@ -1051,7 +1052,7 @@ class CommandHandler:
         self.app.root.after(0, lambda: self.app._show_msg(f'远程指令 {cmd}: {result["msg"]}'))
         return result
 
-    def _download_file(self, task_id, file_name, file_size, download_url):
+    def _download_file(self, task_id, file_name, file_size, download_url, server_file_name=''):
         """后台下载文件（POST方式，支持中文文件名）"""
         import urllib.request
         import urllib.error
@@ -1081,7 +1082,10 @@ class CommandHandler:
             self.app.root.after(0, lambda: self.app._show_msg(f'正在接收文件: {file_name}'))
             
             # 用POST请求下载，文件名在body中，支持中文
-            post_data = json.dumps({'file_name': file_name}).encode('utf-8')
+            post_data = json.dumps({
+                'file_name': file_name,
+                'server_file_name': server_file_name
+            }).encode('utf-8')
             req = urllib.request.Request(download_url, data=post_data, 
                                         headers={'Content-Type': 'application/json', 'User-Agent': 'KZC-Terminal-Manager'},
                                         method='POST')
@@ -1114,7 +1118,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-48')
+        self.root.title('坤展成终端管理系统 v1.3-49')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1198,7 +1202,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-48',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-49',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

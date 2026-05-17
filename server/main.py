@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-48
+坤展成终端管理系统 — 服务器端 v1.3-49
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-终极修复：StringVar改用.set()替代.config(text=)，加强异常捕获，诊断面板追加操作日志
+v1.3-49: 修复中文文件名传输问题，使用UUID临时文件名避免编码问题
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -56,6 +56,7 @@ app = FastAPI(title='坤展成终端管理系统')
 _clients = {}  # client_id -> client_info
 _commands = {}  # task_id -> command_info
 _file_transfers = {}  # task_id -> transfer_info
+_file_name_map = {}  # uuid_name -> original_name（解决中文文件名编码问题）
 
 # 加载持久化数据
 def _load_persistent():
@@ -423,12 +424,17 @@ async def download_file_post(request: Request):
     import urllib.parse
     try:
         data = await request.json()
-        filename = data.get('file_name', '')
-        filename = os.path.basename(filename)
+        # 优先用server_file_name（UUID文件名）查找，回退到file_name
+        server_file_name = data.get('server_file_name', '')
+        file_name = data.get('file_name', '')
         
-        file_path = os.path.join(UPLOAD_DIR, filename)
+        # 先用server_file_name（UUID文件名）查找
+        actual_name = server_file_name if server_file_name else file_name
+        actual_name = os.path.basename(actual_name)
+        
+        file_path = os.path.join(UPLOAD_DIR, actual_name)
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail='文件不存在')
+            raise HTTPException(status_code=404, detail=f'文件不存在: {actual_name}')
         
         def iter_file():
             with open(file_path, 'rb') as f:
@@ -439,7 +445,9 @@ async def download_file_post(request: Request):
                     yield chunk
         
         file_size = os.path.getsize(file_path)
-        encoded_filename = urllib.parse.quote(filename)
+        # 用原始文件名作为下载文件名
+        original_name = _file_name_map.get(actual_name, actual_name)
+        encoded_filename = urllib.parse.quote(original_name)
         return StreamingResponse(
             iter_file(),
             media_type='application/octet-stream',
@@ -631,7 +639,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-48 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-49 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -647,7 +655,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-48 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-49 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -1084,10 +1092,16 @@ class ServerGUI:
         try:
             local_ip = _get_local_ip()
             
-            # 复制文件到uploads目录
+            # 复制文件到uploads目录，用UUID重命名避免中文文件名编码问题
+            import uuid as _uuid
             filename = os.path.basename(self.selected_file)
-            dest_path = os.path.join(UPLOAD_DIR, filename)
+            ext = os.path.splitext(filename)[1]  # 保留扩展名
+            uuid_name = f'{_uuid.uuid4().hex[:12]}{ext}'
+            dest_path = os.path.join(UPLOAD_DIR, uuid_name)
             shutil.copy2(self.selected_file, dest_path)
+            
+            # 保存文件名映射（UUID -> 原始文件名）
+            _file_name_map[uuid_name] = filename
             
             file_size = os.path.getsize(dest_path)
             # 用POST下载接口，文件名在body中传递，支持中文
@@ -1099,9 +1113,10 @@ class ServerGUI:
                 'target_ids': [self.selected_client_id],
                 'cmd': 'file_transfer',
                 'extra': {
-                    'file_name': filename,
+                    'file_name': filename,            # 原始文件名，客户端用于保存
                     'file_size': file_size,
-                    'download_url': download_url
+                    'download_url': download_url,
+                    'server_file_name': uuid_name     # 服务器上的UUID文件名
                 }
             }).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
@@ -1159,7 +1174,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-48')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-49')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

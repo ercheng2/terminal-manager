@@ -932,21 +932,31 @@ class RemoteDesktopViewer:
             try:
                 img = Image.open(io.BytesIO(frame_data))
                 
-                cw = self.canvas.winfo_width()
-                ch = self.canvas.winfo_height()
-                iw, ih = img.size
-                
-                if cw > 100 and ch > 100:
-                    self.screen_scale = min(cw / iw, ch / ih)
-                    new_w = int(iw * self.screen_scale)
-                    new_h = int(ih * self.screen_scale)
-                    img = img.resize((new_w, new_h), Image.NEAREST)
-                    self.offset_x = (cw - new_w) // 2
-                    self.offset_y = (ch - new_h) // 2
-                
-                self.win.after(0, lambda i=img: self._update_canvas(i))
-            except:
-                pass
+                # 在主线程获取canvas尺寸并缩放
+                self.win.after(0, lambda i=img: self._render_frame(i))
+            except Exception as e:
+                print(f'[远程桌面] 解码失败: {e}')
+    
+    def _render_frame(self, img):
+        """主线程：缩放+显示（必须在主线程执行tkinter操作）"""
+        try:
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            iw, ih = img.size
+            
+            if cw > 100 and ch > 100:
+                self.screen_scale = min(cw / iw, ch / ih)
+                new_w = int(iw * self.screen_scale)
+                new_h = int(ih * self.screen_scale)
+                img = img.resize((new_w, new_h), Image.NEAREST)
+                self.offset_x = (cw - new_w) // 2
+                self.offset_y = (ch - new_h) // 2
+            
+            self.current_photo = ImageTk.PhotoImage(img)
+            self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+            self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
+        except Exception as e:
+            print(f'[远程桌面] 显示失败: {e}')
     
     def _update_canvas(self, img):
         """主线程：最快速度更新canvas"""
@@ -954,8 +964,8 @@ class RemoteDesktopViewer:
             self.current_photo = ImageTk.PhotoImage(img)
             self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
             self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-        except:
-            pass
+        except Exception as e:
+            print(f'[远程桌面] canvas更新失败: {e}')
     
     def _canvas_to_client(self, cx, cy):
         """将Canvas坐标转换为客户端屏幕坐标"""

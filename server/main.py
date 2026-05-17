@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-56
+坤展成终端管理系统 — 服务器端 v1.3-57
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-56: 设备列表添加编辑名称功能
+v1.3-57: 设备列表添加编辑名称功能
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -913,11 +913,8 @@ class ServerGUI:
             dot_color = '#27ae60' if online else '#95a5a6'
             dot_canvas.create_oval(2, 2, 12, 12, fill=dot_color, outline='')
             
-            # 文字标签 - 主机名+IP，有别名则在上方显示设备名称
-            if alias:
-                content = f'{alias}\n{hostname}\nIP: {ip}'
-            else:
-                content = f'{hostname}\nIP: {ip}'
+            # 文字标签 - 只显示主机名+IP
+            content = f'{hostname}\nIP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
@@ -936,6 +933,12 @@ class ServerGUI:
             edit_btn = tk.Label(btn_frame, text='✏️', font=('Microsoft YaHei', 10), 
                                bg=card_bg, cursor='hand2')
             edit_btn.pack(side='right')
+            
+            # 设备名称（编辑按钮左侧显示）
+            if alias:
+                alias_label = tk.Label(btn_frame, text=alias, font=('Microsoft YaHei', 9, 'bold'), 
+                                      bg=card_bg, fg='#2c3e50', anchor='e')
+                alias_label.pack(side='right', padx=(8, 4))
             
             def on_edit(event, cid=cid):
                 self._edit_device_alias(cid)
@@ -1272,7 +1275,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-56')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-57')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

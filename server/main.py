@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-53
+坤展成终端管理系统 — 服务器端 v1.3-54
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-53: 发送提示改状态栏+设备在线绿色+移除调试面板
+v1.3-54: 设备列表添加编辑名称功能
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -29,12 +29,35 @@ if getattr(sys, 'frozen', False):
 
 # ===== 路径适配 =====
 if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    _APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
+BASE_DIR = _APP_DIR
 DB_FILE = os.path.join(BASE_DIR, 'devices.json')
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
+
+# 设备别名存储
+_device_alias = {}  # client_id -> 自定义名称
+_ALIAS_FILE = os.path.join(BASE_DIR, 'device_alias.json')
+
+def _load_device_alias():
+    """加载设备别名"""
+    global _device_alias
+    try:
+        if os.path.exists(_ALIAS_FILE):
+            with open(_ALIAS_FILE, 'r', encoding='utf-8') as f:
+                _device_alias = json.load(f)
+    except:
+        _device_alias = {}
+
+def _save_device_alias():
+    """保存设备别名"""
+    try:
+        with open(_ALIAS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_device_alias, f, ensure_ascii=False, indent=2)
+    except:
+        pass
 
 # 确保上传目录存在
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -878,12 +901,24 @@ class ServerGUI:
             icon = '🟢' if online else '⚫'
             hostname = info.get('hostname', '未知')
             ip = info.get('ip', '')
+            # 优先使用自定义名称
+            alias = _device_alias.get(cid, '')
+            display_name = f'{alias}（{hostname}）' if alias else hostname
             
-            content = f'{icon} {hostname}\n   IP: {ip}'
+            content = f'{icon} {display_name}\n   IP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
-            lbl.pack(fill='x', padx=8, pady=5)
+            lbl.pack(side='left', fill='x', padx=(8, 0), pady=5)
+            
+            # 编辑按钮
+            edit_btn = tk.Label(card, text='✏️', font=('Microsoft YaHei', 10), 
+                               bg=card_bg, cursor='hand2')
+            edit_btn.pack(side='right', padx=(0, 8), pady=5)
+            
+            def on_edit(event, cid=cid):
+                self._edit_device_alias(cid)
+            edit_btn.bind('<Button-1>', on_edit)
             
             # 绑定点击事件
             def on_click(cid=cid):
@@ -891,7 +926,11 @@ class ServerGUI:
             for widget in [card, lbl]:
                 widget.bind('<Button-1>', lambda e, c=cid: on_click(c))
                 widget.bind('<Enter>', lambda e, w=card: w.config(cursor='hand2') if hasattr(w, 'config') else None)
-                widget.bind('<Leave>', lambda e, w=card, orig_bg=card_bg: w.config(bg=orig_bg) if hasattr(w, 'config') else None)
+                widget.bind('<Leave>', lambda e, w=card, eb=edit_btn, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg)) if hasattr(w, 'config') else None)
+            
+            # edit_btn 悬停效果
+            edit_btn.bind('<Enter>', lambda e, w=card, eb=edit_btn: (w.config(cursor='hand2'), eb.config(bg='#f0f0f0')))
+            edit_btn.bind('<Leave>', lambda e, w=card, eb=edit_btn, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg)))
         
         # 更新状态栏
         local_ip = _get_local_ip()
@@ -914,6 +953,53 @@ class ServerGUI:
         """选择设备"""
         self.selected_client_id = cid
         self._refresh_devices()  # 重新渲染以显示选中效果
+    
+    def _edit_device_alias(self, cid):
+        """编辑设备别名"""
+        current_alias = _device_alias.get(cid, '')
+        # 创建简单的编辑弹窗
+        dialog = tk.Toplevel(self.root)
+        dialog.title('编辑设备名称')
+        dialog.geometry('350x120')
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 居中显示
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
+        dialog.geometry(f'+{x}+{y}')
+        
+        hostname = _clients.get(cid, {}).get('hostname', cid)
+        tk.Label(dialog, text=f'设备: {hostname}', font=('Microsoft YaHei', 9)).pack(pady=(10, 5))
+        
+        entry = tk.Entry(dialog, font=('Microsoft YaHei', 10), width=30)
+        entry.pack(padx=20)
+        entry.insert(0, current_alias)
+        entry.select_range(0, 'end')
+        entry.focus_set()
+        
+        def on_confirm():
+            new_alias = entry.get().strip()
+            if new_alias:
+                _device_alias[cid] = new_alias
+            elif cid in _device_alias:
+                del _device_alias[cid]
+            _save_device_alias()
+            dialog.destroy()
+            self._refresh_devices()
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text='确定', width=8, bg='#27ae60', fg='white', command=on_confirm).pack(side='left', padx=5)
+        tk.Button(btn_frame, text='取消', width=8, command=on_cancel).pack(side='left', padx=5)
+        
+        entry.bind('<Return>', lambda e: on_confirm())
+        entry.bind('<Escape>', lambda e: on_cancel())
     
     def _update_device_detail(self, info=None):
         """更新设备详情 - 直接从_clients全局变量读取最新数据"""
@@ -942,8 +1028,12 @@ class ServerGUI:
             disk = 0.0
         
         # 更新标题和基本信息
-        self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
-        for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
+        hostname = live_info.get('hostname', '未知')
+        alias = _device_alias.get(self.selected_client_id, '')
+        display_name = f'{alias}（{hostname}）' if alias else hostname
+        self.detail_title.config(text=f'设备详情 - {display_name}')
+        self.info_labels['hostname'].config(text=display_name)
+        for key, label in [('ip', 'IP地址'), ('mac', 'MAC地址'),
                           ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
             self.info_labels[key].config(text=live_info.get(key, '-'))
         
@@ -1072,6 +1162,9 @@ def main():
     import uvicorn
     import asyncio
     
+    # 加载设备别名
+    _load_device_alias()
+    
     # 启动UDP广播
     t_broadcast = threading.Thread(target=_broadcast_server, daemon=True)
     t_broadcast.start()
@@ -1108,7 +1201,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-53')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-54')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

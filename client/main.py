@@ -924,19 +924,12 @@ class HTTPClient:
         if not self.connected or not self.client_id:
             return
 
-        # 第二步：轮询指令（同时上报系统状态）
+        # 第二步：轮询指令
         try:
-            # 每次轮询都采集最新系统信息
-            fresh_info = SystemInfo.get_info()
-            poll_url = (
-                f'{base_url}/api/client/poll'
-                f'?client_id={self.client_id}'
-                f'&cpu_percent={fresh_info.get("cpu_percent", 0)}'
-                f'&memory_percent={fresh_info.get("memory_percent", 0)}'
-                f'&disk_percent={fresh_info.get("disk_percent", 0)}'
-                f'&ip={fresh_info.get("ip", "")}'
+            req = urllib.request.Request(
+                f'{base_url}/api/client/poll?client_id={self.client_id}',
+                method='GET'
             )
-            req = urllib.request.Request(poll_url, method='GET')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 commands = result.get('commands', [])
@@ -949,6 +942,27 @@ class HTTPClient:
                             self._last_command_ids = set(list(self._last_command_ids)[-50:])
                         if self.on_command:
                             self.on_command(cmd)
+        except:
+            pass
+        
+        # 第三步：上报系统状态（POST，更可靠）
+        try:
+            fresh_info = SystemInfo.get_info()
+            status_data = json.dumps({
+                'client_id': self.client_id,
+                'cpu_percent': fresh_info.get('cpu_percent', 0),
+                'memory_percent': fresh_info.get('memory_percent', 0),
+                'disk_percent': fresh_info.get('disk_percent', 0),
+                'ip': fresh_info.get('ip', ''),
+            }).encode('utf-8')
+            req = urllib.request.Request(
+                f'{base_url}/api/client/status',
+                data=status_data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
         except:
             pass
 

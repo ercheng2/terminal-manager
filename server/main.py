@@ -255,20 +255,14 @@ async def client_register(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get('/api/client/poll')
-async def client_poll(client_id: str, cpu_percent: float = 0, memory_percent: float = 0,
-                      disk_percent: float = 0, ip: str = ''):
-    """客户端轮询指令（同时更新系统状态）"""
+async def client_poll(client_id: str):
+    """客户端轮询指令"""
     if client_id not in _clients:
         raise HTTPException(status_code=400, detail='未注册')
 
-    # 更新最后在线时间和系统状态
+    # 更新最后在线时间
     _clients[client_id]['last_seen'] = datetime.datetime.now()
-    _clients[client_id]['cpu_percent'] = cpu_percent
-    _clients[client_id]['memory_percent'] = memory_percent
-    _clients[client_id]['disk_percent'] = disk_percent
-    if ip:
-        _clients[client_id]['ip'] = ip
-    
+
     # 获取该客户端的待处理指令
     commands = []
     for tid, cmd in _commands.items():
@@ -276,6 +270,29 @@ async def client_poll(client_id: str, cpu_percent: float = 0, memory_percent: fl
             commands.append(cmd)
 
     return {'client_id': client_id, 'commands': commands}
+
+@app.post('/api/client/status')
+async def client_status(request: Request):
+    """客户端上报系统状态（POST方式，更可靠）"""
+    try:
+        data = await request.json()
+        client_id = data.get('client_id', '')
+        if client_id not in _clients:
+            raise HTTPException(status_code=400, detail='未注册')
+        _clients[client_id]['last_seen'] = datetime.datetime.now()
+        if 'cpu_percent' in data:
+            _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
+        if 'memory_percent' in data:
+            _clients[client_id]['memory_percent'] = float(data['memory_percent'])
+        if 'disk_percent' in data:
+            _clients[client_id]['disk_percent'] = float(data['disk_percent'])
+        if data.get('ip'):
+            _clients[client_id]['ip'] = data['ip']
+        return {'success': True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post('/api/client/result')
 async def client_result(request: Request):
@@ -505,7 +522,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v2.0 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-40 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-43
+坤展成终端管理系统 — 服务器端 v1.3-44
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
+修复：_update_device_detail直接从_clients全局变量读取，修复系统状态0%问题
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -591,7 +592,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-43 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-44 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -607,7 +608,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-42 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-44 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -826,8 +827,8 @@ class ServerGUI:
         self._last_online_count = online_count
         
         # 如果有选中的设备，更新详情
-        if self.selected_client_id and self.selected_client_id in clients_copy:
-            self._update_device_detail(clients_copy[self.selected_client_id])
+        if self.selected_client_id and self.selected_client_id in _clients:
+            self._update_device_detail()
         
         # 更新诊断信息
         import json as _json
@@ -853,34 +854,40 @@ class ServerGUI:
         self.selected_client_id = cid
         self._refresh_devices()  # 重新渲染以显示选中效果
     
-    def _update_device_detail(self, info):
-        """更新设备详情"""
-        print(f'[GUI调试] 更新设备详情: cpu={info.get("cpu_percent", "N/A")}, mem={info.get("memory_percent", "N/A")}, disk={info.get("disk_percent", "N/A")}')
-        self.detail_title.config(text=f'设备详情 - {info.get("hostname", "未知")}')
+    def _update_device_detail(self, info=None):
+        """更新设备详情 - 直接从_clients全局变量读取最新数据"""
+        # 直接从全局变量读取最新数据，不依赖传入的info参数
+        if not self.selected_client_id or self.selected_client_id not in _clients:
+            return
+        
+        live_info = _clients[self.selected_client_id]
+        
+        cpu_raw = live_info.get('cpu_percent', 0)
+        mem_raw = live_info.get('memory_percent', 0)
+        disk_raw = live_info.get('disk_percent', 0)
+        
+        print(f'[GUI调试] 直接读_clients: cpu={cpu_raw}, mem={mem_raw}, disk={disk_raw}')
+        
+        self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
         
         # 基本信息
         for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
                           ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
-            self.info_labels[key].config(text=info.get(key, '-'))
+            self.info_labels[key].config(text=live_info.get(key, '-'))
         
         # 系统状态
-        cpu = info.get('cpu_percent', 0)
-        mem = info.get('memory_percent', 0)
-        disk = info.get('disk_percent', 0)
-        
-        # 转换为数字（可能是字符串）
         try:
-            cpu = float(cpu)
-        except:
-            cpu = 0
+            cpu = float(cpu_raw) if cpu_raw is not None else 0.0
+        except (ValueError, TypeError):
+            cpu = 0.0
         try:
-            mem = float(mem)
-        except:
-            mem = 0
+            mem = float(mem_raw) if mem_raw is not None else 0.0
+        except (ValueError, TypeError):
+            mem = 0.0
         try:
-            disk = float(disk)
-        except:
-            disk = 0
+            disk = float(disk_raw) if disk_raw is not None else 0.0
+        except (ValueError, TypeError):
+            disk = 0.0
         
         self.cpu_var.config(text=f'{cpu:.1f}%')
         self.cpu_progress['value'] = cpu
@@ -1057,7 +1064,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-44')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

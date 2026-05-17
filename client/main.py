@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-51
+坤展成终端管理系统 — 客户端 v1.3-58
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -109,9 +109,13 @@ def _write_startup_reg(name, path):
     try:
         key = _get_run_key()
         if key:
-            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, path)
+            # 确保路径使用反斜杠，并用双引号包裹（处理路径含空格的情况）
+            reg_path = os.path.normpath(path)
+            if not reg_path.startswith('"'):
+                reg_path = f'"{reg_path}"'
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, reg_path)
             winreg.CloseKey(key)
-            print(f'[注册表] 写入启动项: {name} -> {path}')
+            print(f'[注册表] 写入启动项: {name} -> {reg_path}')
             return True
     except Exception as e:
         print(f'[注册表] 写入失败: {e}')
@@ -149,7 +153,8 @@ def _sync_startup_to_registry(startup_items):
         while True:
             try:
                 n, v, _ = winreg.EnumValue(key, i)
-                existing[n] = v
+                # 去掉引号后存储，便于比较
+                existing[n] = v.strip('"')
                 i += 1
             except OSError:
                 break
@@ -163,9 +168,10 @@ def _sync_startup_to_registry(startup_items):
         for name in should_delete:
             _delete_startup_reg(name)
         
-        # 添加应该存在但还不存在的项
+        # 添加应该存在但还不存在的项，或路径不一致的需要更新
         for name, path in should_exist.items():
-            if name not in existing:
+            norm_path = os.path.normpath(path)
+            if name not in existing or existing[name] != norm_path:
                 _write_startup_reg(name, path)
     except Exception as e:
         print(f'[注册表] 同步失败: {e}')
@@ -1137,7 +1143,7 @@ class TerminalApp:
         icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
-        self.root.title('坤展成终端管理系统 v1.3-51')
+        self.root.title('坤展成终端管理系统 v1.3-58')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1221,7 +1227,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-51',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-58',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

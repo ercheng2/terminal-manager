@@ -744,8 +744,8 @@ class RemoteDesktopViewer:
         self.frame_count = 0
         self.fps_timer = time.time()
         self._last_move_time = 0  # 鼠标移动节流
-        self._displaying = False  # 跳帧标志
-        self._pending_frame = None  # 待显示帧
+        self._canvas_size = (1024, 700)  # 缓存canvas尺寸
+        self._latest_img = None  # 后台解码完的PIL Image
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
@@ -793,7 +793,7 @@ class RemoteDesktopViewer:
             return
     
     def _fetch_via_tcp(self):
-        """TCP流模式"""
+        """TCP流模式——后台解码，主线程只显示"""
         import socket
         
         while self.running:
@@ -850,10 +850,10 @@ class RemoteDesktopViewer:
                         self.frame_count = 0
                         self.fps_timer = now
                     
-                    self._pending_frame = frame_data
-                    if not self._displaying:
-                        self._displaying = True
-                        self.win.after(0, self._show_pending_frame)
+                    # 后台解码+缩放（重活在后台做）
+                    img = self._decode_and_scale(frame_data)
+                    if img:
+                        self.win.after(0, lambda i=img: self._show_frame(i))
                 
             except Exception as e:
                 if not self.running:
@@ -866,7 +866,7 @@ class RemoteDesktopViewer:
                     pass
     
     def _fetch_via_http(self):
-        """HTTP模式（兼容回退）"""
+        """HTTP模式——后台解码，主线程只显示"""
         self.win.after(0, lambda: self.status_var.set('已连接(HTTP)'))
         
         while self.running:
@@ -895,16 +895,50 @@ class RemoteDesktopViewer:
                     self.frame_count = 0
                     self.fps_timer = now
                 
-                self._pending_frame = jpeg_data
-                if not self._displaying:
-                    self._displaying = True
-                    self.win.after(0, self._show_pending_frame)
+                # 后台解码+缩放
+                img = self._decode_and_scale(jpeg_data)
+                if img:
+                    self.win.after(0, lambda i=img: self._show_frame(i))
                 
             except Exception as e:
                 if not self.running:
                     break
                 self.win.after(0, lambda: self.status_var.set('HTTP重连中...'))
                 time.sleep(1)
+    
+    def _decode_and_scale(self, jpeg_data):
+        """后台线程：JPEG解码+缩放（不在主线程做，避免卡顿）"""
+        try:
+            img = Image.open(io.BytesIO(jpeg_data))
+            iw, ih = img.size
+            cw, ch = self._canvas_size
+            
+            if cw > 100 and ch > 100:
+                self.screen_scale = min(cw / iw, ch / ih)
+                new_w = int(iw * self.screen_scale)
+                new_h = int(ih * self.screen_scale)
+                img = img.resize((new_w, new_h), Image.NEAREST)
+                self.offset_x = (cw - new_w) // 2
+                self.offset_y = (ch - new_h) // 2
+            
+            return img
+        except:
+            return None
+    
+    def _show_frame(self, img):
+        """主线程：只做PhotoImage+更新canvas（极快，<5ms）"""
+        try:
+            # 更新canvas尺寸缓存
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            if cw > 100 and ch > 100:
+                self._canvas_size = (cw, ch)
+            
+            self.current_photo = ImageTk.PhotoImage(img)
+            self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+            self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
+        except Exception as e:
+            print(f'[远程桌面] 显示失败: {e}')
     
     def _notify_quality(self):
         """通知客户端画质设置"""
@@ -916,45 +950,6 @@ class RemoteDesktopViewer:
             urllib.request.urlopen(req, timeout=1)
         except:
             pass
-    
-    def _show_pending_frame(self):
-        """显示最新帧（跳帧机制）"""
-        frame_data = self._pending_frame
-        self._pending_frame = None
-        if frame_data:
-            self._display_frame(frame_data)
-        if self._pending_frame:
-            self.win.after(1, self._show_pending_frame)
-        else:
-            self._displaying = False
-    
-    def _display_frame(self, jpeg_data):
-        """显示截图帧"""
-        try:
-            img = Image.open(io.BytesIO(jpeg_data))
-            
-            cw = self.canvas.winfo_width()
-            ch = self.canvas.winfo_height()
-            iw, ih = img.size
-            
-            if cw > 100 and ch > 100:
-                self.screen_scale = min(cw / iw, ch / ih)
-                new_w = int(iw * self.screen_scale)
-                new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.NEAREST)
-                self.offset_x = (cw - new_w) // 2
-                self.offset_y = (ch - new_h) // 2
-            else:
-                self.screen_scale = 1.0
-                self.offset_x = 0
-                self.offset_y = 0
-            
-            self.current_photo = ImageTk.PhotoImage(img)
-            # 用itemconfig更新，比delete+create快5-10倍
-            self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-            self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-        except Exception as e:
-            print(f'[远程桌面] 显示帧失败: {e}')
     
     def _recv_exact(self, sock, n):
         """精确接收n字节数据"""
@@ -970,18 +965,6 @@ class RemoteDesktopViewer:
             except:
                 return None
         return data if len(data) == n else None
-    
-    def _decode_loop(self):
-        """后台解码线程（保留但当前未使用）"""
-        pass
-    
-    def _render_frame(self, img):
-        """主线程渲染（保留但当前未使用）"""
-        pass
-    
-    def _update_canvas(self, img):
-        """主线程更新canvas（保留但当前未使用）"""
-        pass
     
     def _canvas_to_client(self, cx, cy):
         """将Canvas坐标转换为客户端屏幕坐标"""

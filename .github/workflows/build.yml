@@ -28,7 +28,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TerminalManager-client
-          path: client/dist/TerminalManager.exe
+          path: client/dist/TerminalManager-Client.exe
 
   build-server:
     runs-on: windows-latest

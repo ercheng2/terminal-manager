@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-44
+坤展成终端管理系统 — 服务器端 v1.3-45
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-修复：_update_device_detail直接从_clients全局变量读取，修复系统状态0%问题
+终极修复：StringVar改用.set()替代.config(text=)，加强异常捕获，诊断面板追加操作日志
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -592,7 +592,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-44 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-45 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -608,7 +608,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-44 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-45 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -854,10 +854,20 @@ class ServerGUI:
         self.selected_client_id = cid
         self._refresh_devices()  # 重新渲染以显示选中效果
     
+    def _append_diag(self, msg):
+        """向诊断面板追加信息"""
+        try:
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+            self.diag_text.insert('end', f'\n[{timestamp}] {msg}')
+            self.diag_text.see('end')
+        except:
+            pass
+    
     def _update_device_detail(self, info=None):
         """更新设备详情 - 直接从_clients全局变量读取最新数据"""
         # 直接从全局变量读取最新数据，不依赖传入的info参数
         if not self.selected_client_id or self.selected_client_id not in _clients:
+            self._append_diag('未选中设备或设备不在线')
             return
         
         live_info = _clients[self.selected_client_id]
@@ -866,35 +876,67 @@ class ServerGUI:
         mem_raw = live_info.get('memory_percent', 0)
         disk_raw = live_info.get('disk_percent', 0)
         
-        print(f'[GUI调试] 直接读_clients: cpu={cpu_raw}, mem={mem_raw}, disk={disk_raw}')
+        self._append_diag(f'读取数据: cpu_raw={cpu_raw}, mem_raw={mem_raw}, disk_raw={disk_raw}')
         
-        self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
-        
-        # 基本信息
-        for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
-                          ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
-            self.info_labels[key].config(text=live_info.get(key, '-'))
-        
-        # 系统状态
+        # 系统状态转换，加异常捕获
         try:
             cpu = float(cpu_raw) if cpu_raw is not None else 0.0
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             cpu = 0.0
+            self._append_diag(f'CPU转换异常: {e}, raw={cpu_raw}')
         try:
             mem = float(mem_raw) if mem_raw is not None else 0.0
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             mem = 0.0
+            self._append_diag(f'MEM转换异常: {e}, raw={mem_raw}')
         try:
             disk = float(disk_raw) if disk_raw is not None else 0.0
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             disk = 0.0
+            self._append_diag(f'DISK转换异常: {e}, raw={disk_raw}')
         
-        self.cpu_var.config(text=f'{cpu:.1f}%')
-        self.cpu_progress['value'] = cpu
-        self.mem_var.config(text=f'{mem:.1f}%')
-        self.mem_progress['value'] = mem
-        self.disk_var.config(text=f'{disk:.1f}%')
-        self.disk_progress['value'] = disk
+        self._append_diag(f'转换后: cpu={cpu}, mem={mem}, disk={disk}')
+        
+        # 更新标题和基本信息
+        try:
+            self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
+            for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
+                              ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
+                self.info_labels[key].config(text=live_info.get(key, '-'))
+        except Exception as e:
+            self._append_diag(f'更新基本信息异常: {e}')
+        
+        # 更新系统状态 - 用.set()替代.config(text=)，每步单独try/except
+        try:
+            cpu_text = f'{cpu:.1f}%'
+            self._append_diag(f'设置cpu_var.set({cpu_text})')
+            self.cpu_var.set(cpu_text)  # StringVar标准用法
+            self.cpu_progress['value'] = cpu
+        except Exception as e:
+            self._append_diag(f'设置CPU异常: {e}')
+        
+        try:
+            mem_text = f'{mem:.1f}%'
+            self._append_diag(f'设置mem_var.set({mem_text})')
+            self.mem_var.set(mem_text)  # StringVar标准用法
+            self.mem_progress['value'] = mem
+        except Exception as e:
+            self._append_diag(f'设置MEM异常: {e}')
+        
+        try:
+            disk_text = f'{disk:.1f}%'
+            self._append_diag(f'设置disk_var.set({disk_text})')
+            self.disk_var.set(disk_text)  # StringVar标准用法
+            self.disk_progress['value'] = disk
+        except Exception as e:
+            self._append_diag(f'设置DISK异常: {e}')
+        
+        # 强制刷新UI
+        try:
+            self.root.update_idletasks()
+            self._append_diag('UI刷新完成')
+        except:
+            pass
     
     def _api_self_test(self):
         """向自己的API发送测试数据，验证poll接口是否正常"""
@@ -915,15 +957,28 @@ class ServerGUI:
             self.diag_text.insert('end', f'\n--- API自测失败: {e} ---')
 
     def _manual_test_data(self):
-        """手动往_clients写入测试数据，验证GUI显示是否正常"""
+        """手动往_clients写入测试数据，并直接设置StringVar验证"""
         if not _clients:
-            self.diag_text.insert('end', '\n--- 无客户端 ---')
+            self._append_diag('无客户端')
             return
         test_cid = list(_clients.keys())[0]
         _clients[test_cid]['cpu_percent'] = 55.5
         _clients[test_cid]['memory_percent'] = 44.4
         _clients[test_cid]['disk_percent'] = 33.3
-        self.diag_text.insert('end', f'\n--- 手动写入: cpu=55.5, mem=44.4, disk=33.3 ---\n当前值: cpu={_clients[test_cid].get("cpu_percent")}, mem={_clients[test_cid].get("memory_percent")}, disk={_clients[test_cid].get("disk_percent")}')
+        
+        # 直接设置StringVar验证控件是否响应
+        try:
+            self.cpu_var.set('55.5%')
+            self.mem_var.set('44.4%')
+            self.disk_var.set('33.3%')
+            self.cpu_progress['value'] = 55.5
+            self.mem_progress['value'] = 44.4
+            self.disk_progress['value'] = 33.3
+            self.root.update_idletasks()
+            self._append_diag(f'直接设置StringVar: cpu=55.5%, mem=44.4%, disk=33.3%')
+        except Exception as e:
+            self._append_diag(f'直接设置StringVar异常: {e}')
+        
         self._refresh_devices()
     
     def _send_command(self, cmd):
@@ -1064,7 +1119,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-44')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-45')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

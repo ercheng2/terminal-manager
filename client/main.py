@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-43
+坤展成终端管理系统 — 客户端 v1.3-45
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -1115,7 +1115,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-43')
+        self.root.title('坤展成终端管理系统 v1.3-45')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1199,7 +1199,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-42',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-45',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

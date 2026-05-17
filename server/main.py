@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-50
+坤展成终端管理系统 — 服务器端 v1.3-51
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-50: 发送提示改状态栏+设备在线绿色+移除调试面板
+v1.3-51: 发送提示改状态栏+设备在线绿色+移除调试面板
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -12,6 +12,14 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import shutil
+
+def resource_path(relative_path):
+    """获取资源文件绝对路径（兼容PyInstaller打包）"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 # --windowed打包后print会报错，重定向到日志文件
 if getattr(sys, 'frozen', False):
@@ -639,7 +647,10 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-50 - 服务器端')
+        icon_path = resource_path('icon.ico')
+        if os.path.exists(icon_path):
+            self.root.iconbitmap(icon_path)
+        self.root.title('坤展成终端管理系统 v1.3-51 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -655,7 +666,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-50 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-51 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -1061,7 +1072,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-50')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-51')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

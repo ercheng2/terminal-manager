@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-49
+坤展成终端管理系统 — 客户端 v1.3-51
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -12,6 +12,14 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 import socket
+
+def resource_path(relative_path):
+    """获取资源文件绝对路径（兼容PyInstaller打包）"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 # --windowed打包后print会报错，重定向
 if getattr(sys, 'frozen', False):
@@ -168,10 +176,18 @@ _tray_icon = None
 _tray_root_ref = None
 
 def _create_tray_image():
-    """创建托盘图标（16x16蓝色背景K字）"""
-    img = Image.new('RGB', (16, 16), (41, 128, 185))  # 蓝色背景 #2980b9
+    """从ico文件创建托盘图标"""
+    try:
+        icon_path = resource_path('icon.ico')
+        if os.path.exists(icon_path):
+            img = Image.open(icon_path)
+            img = img.resize((16, 16), Image.LANCZOS)
+            return img
+    except Exception:
+        pass
+    # fallback
+    img = Image.new('RGB', (16, 16), (41, 128, 185))
     draw = ImageDraw.Draw(img)
-    # 画一个简单的K
     draw.text((3, 1), 'K', fill='white')
     return img
 
@@ -1118,7 +1134,10 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-49')
+        icon_path = resource_path('icon.ico')
+        if os.path.exists(icon_path):
+            self.root.iconbitmap(icon_path)
+        self.root.title('坤展成终端管理系统 v1.3-51')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1202,7 +1221,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-49',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-51',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

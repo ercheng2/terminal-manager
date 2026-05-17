@@ -718,6 +718,7 @@ class RemoteDesktopViewer:
         # 画面显示区域
         self.canvas = tk.Canvas(self.win, bg='#1a1a2e', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
+        self._canvas_img_id = self.canvas.create_image(0, 0, anchor='nw')  # 预创建canvas image item
         
         # 状态提示
         self.status_var = tk.StringVar(value='正在连接...')
@@ -743,8 +744,11 @@ class RemoteDesktopViewer:
         self.frame_count = 0
         self.fps_timer = time.time()
         self._last_move_time = 0  # 鼠标移动节流
-        self._displaying = False  # 跳帧标志：正在显示时跳过新帧
-        self._pending_frame = None  # 最新待显示帧
+        
+        # 后台解码队列——接收线程放入JPEG数据，解码线程处理
+        self._decode_queue = queue.Queue(maxsize=2)  # 只保留最新2帧
+        self._decode_thread = threading.Thread(target=self._decode_loop, daemon=True)
+        self._decode_thread.start()
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
@@ -768,13 +772,10 @@ class RemoteDesktopViewer:
             return None
     
     def _fetch_loop(self):
-        """TCP流模式——连接客户端5902端口，接收帧推送"""
+        """TCP流接收线程——只负责收帧，放入解码队列"""
         import socket
         
-        # 先获取屏幕信息
         self._get_screen_info()
-        
-        # 发送初始画质
         self._notify_quality()
         
         while self.running:
@@ -784,51 +785,24 @@ class RemoteDesktopViewer:
                 sock.settimeout(5)
                 sock.connect((self.client_ip, 5902))
                 sock.settimeout(3)
-                self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
+                self.win.after(0, lambda: self.status_var.set('已连接'))
                 
                 while self.running:
-                    # 读取4字节帧长度头
-                    header = b''
-                    while len(header) < 4 and self.running:
-                        try:
-                            chunk = sock.recv(4 - len(header))
-                            if not chunk:
-                                raise ConnectionError()
-                            header += chunk
-                        except socket.timeout:
-                            continue
-                    
-                    if not self.running:
+                    header = self._recv_exact(sock, 4)
+                    if header is None:
                         break
-                    if len(header) < 4:
-                        raise ConnectionError("Incomplete header")
                     
                     frame_len = struct.unpack('!I', header)[0]
-                    
-                    # 空帧标记（画面没变化）
                     if frame_len == 0:
                         continue
-                    
                     if frame_len > 10 * 1024 * 1024:
-                        raise ValueError(f"Frame too large: {frame_len}")
-                    
-                    # 读取帧数据
-                    frame_data = b''
-                    while len(frame_data) < frame_len and self.running:
-                        try:
-                            chunk = sock.recv(min(frame_len - len(frame_data), 65536))
-                            if not chunk:
-                                raise ConnectionError()
-                            frame_data += chunk
-                        except socket.timeout:
-                            continue
-                    
-                    if not self.running:
                         break
-                    if len(frame_data) < frame_len:
-                        raise ConnectionError("Incomplete frame")
                     
-                    # 更新FPS
+                    frame_data = self._recv_exact(sock, frame_len)
+                    if frame_data is None:
+                        break
+                    
                     self.frame_count += 1
                     now = time.time()
                     if now - self.fps_timer >= 1.0:
@@ -837,74 +811,83 @@ class RemoteDesktopViewer:
                         self.frame_count = 0
                         self.fps_timer = now
                     
-                    # 只保留最新帧，跳过中间帧
-                    self._pending_frame = frame_data
-                    if not self._displaying:
-                        self._displaying = True
-                        self.win.after(0, self._show_pending_frame)
+                    # 放入解码队列（满则丢弃旧帧）
+                    try:
+                        self._decode_queue.put_nowait(frame_data)
+                    except queue.Full:
+                        try:
+                            self._decode_queue.get_nowait()
+                            self._decode_queue.put_nowait(frame_data)
+                        except queue.Empty:
+                            pass
                 
             except Exception as e:
                 if not self.running:
                     break
-                self.win.after(0, lambda: self.status_var.set(f'连接中断，重连中...'))
+                self.win.after(0, lambda: self.status_var.set('连接中断，重连中...'))
                 time.sleep(2)
                 try:
                     sock.close()
                 except:
                     pass
     
-    def _notify_quality(self):
-        """通知客户端画质设置"""
+    def _recv_exact(self, sock, n):
+        """精确接收n字节数据"""
+        data = b''
+        while len(data) < n and self.running:
+            try:
+                chunk = sock.recv(min(n - len(data), 131072))
+                if not chunk:
+                    return None
+                data += chunk
+            except socket.timeout:
+                continue
+            except:
+                return None
+        return data if len(data) == n else None
+    
+    def _decode_loop(self):
+        """后台解码线程——JPEG解码+缩放，把最终img推到主线程"""
+        while self.running:
+            try:
+                frame_data = self._decode_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            
+            # 跳过积压帧，只解码最新的
+            while not self._decode_queue.empty():
+                try:
+                    frame_data = self._decode_queue.get_nowait()
+                except queue.Empty:
+                    break
+            
+            try:
+                img = Image.open(io.BytesIO(frame_data))
+                
+                cw = self.canvas.winfo_width()
+                ch = self.canvas.winfo_height()
+                iw, ih = img.size
+                
+                if cw > 100 and ch > 100:
+                    self.screen_scale = min(cw / iw, ch / ih)
+                    new_w = int(iw * self.screen_scale)
+                    new_h = int(ih * self.screen_scale)
+                    img = img.resize((new_w, new_h), Image.NEAREST)
+                    self.offset_x = (cw - new_w) // 2
+                    self.offset_y = (ch - new_h) // 2
+                
+                self.win.after(0, lambda i=img: self._update_canvas(i))
+            except:
+                pass
+    
+    def _update_canvas(self, img):
+        """主线程：最快速度更新canvas"""
         try:
-            quality = self.quality_var.get()
-            url = f'http://{self.client_ip}:5901/input'
-            data = json.dumps({'input_type': 'set_quality', 'quality': quality}).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
-            urllib.request.urlopen(req, timeout=1)
+            self.current_photo = ImageTk.PhotoImage(img)
+            self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+            self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
         except:
             pass
-    
-    def _show_pending_frame(self):
-        """显示最新待显示帧（跳帧机制，只显示最新帧）"""
-        frame_data = self._pending_frame
-        self._pending_frame = None
-        if frame_data:
-            self._display_frame(frame_data)
-        # 检查是否有更新的帧
-        if self._pending_frame:
-            self.win.after(1, self._show_pending_frame)
-        else:
-            self._displaying = False
-    
-    def _display_frame(self, jpeg_data):
-        """显示截图帧"""
-        try:
-            img = Image.open(io.BytesIO(jpeg_data))
-            self.current_img = img  # 保持引用
-            
-            # 缩放适配Canvas大小
-            cw = self.canvas.winfo_width()
-            ch = self.canvas.winfo_height()
-            iw, ih = img.size
-            
-            if cw > 100 and ch > 100:
-                self.screen_scale = min(cw / iw, ch / ih)
-                new_w = int(iw * self.screen_scale)
-                new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.NEAREST)
-                self.offset_x = (cw - new_w) // 2
-                self.offset_y = (ch - new_h) // 2
-            else:
-                # Canvas还没渲染完，用原始尺寸
-                self.screen_scale = 1.0
-                self.offset_x = 0
-                self.offset_y = 0
-            
-            self.current_photo = ImageTk.PhotoImage(img)
-            self.canvas.delete('all')
-            self.canvas.create_image(self.offset_x, self.offset_y, anchor='nw', image=self.current_photo)
-        except Exception as e:
-            print(f'[远程桌面] 显示帧失败: {e}')
     
     def _canvas_to_client(self, cx, cy):
         """将Canvas坐标转换为客户端屏幕坐标"""

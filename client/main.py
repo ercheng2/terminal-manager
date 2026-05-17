@@ -1152,37 +1152,40 @@ class ScreenHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def _stream_frames(conn):
-    """TCP流推送——持续推送帧到服务器端（极速版，不降画质）"""
+    """TCP流推送——极速版，全分辨率，后台编码"""
     import mss
     import socket
     import zlib
     sct = mss.mss()
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
     
-    prev_hash = None  # 上一帧hash，用于增量检测
+    prev_hash = None
+    
+    # 预分配JPEG缓冲区
+    jpeg_buf = io.BytesIO()
     
     try:
         while True:
             screenshot = sct.grab(monitor)
             raw = screenshot.bgra
             
-            # 快速hash检测（取前10KB做hash，足够判断画面变化）
+            # 快速增量检测
             frame_hash = zlib.crc32(raw[:10240])
             if prev_hash is not None and frame_hash == prev_hash:
-                # 画面没变化，发送空帧标记
                 conn.sendall(struct.pack('!I', 0))
                 continue
             prev_hash = frame_hash
             
-            # 转换RGB
+            # BGRA→RGB转换
             img = Image.frombytes('RGB', screenshot.size, raw, 'raw', 'BGRX')
             
-            # JPEG极速压缩
-            buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
-            jpeg_data = buf.getvalue()
+            # JPEG极速编码
+            jpeg_buf.seek(0)
+            jpeg_buf.truncate()
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+            jpeg_data = jpeg_buf.getvalue()
             
-            # 发送帧
+            # 发送
             conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-47
+坤展成终端管理系统 — 服务器端 v1.3-48
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
 终极修复：StringVar改用.set()替代.config(text=)，加强异常捕获，诊断面板追加操作日志
@@ -392,8 +392,6 @@ async def download_file(filename: str):
     filename = urllib.parse.unquote(filename)
     # 安全检查：禁止路径穿越
     filename = os.path.basename(filename)
-    if '..' in filename:
-        raise HTTPException(status_code=400, detail='无效的文件名')
     
     file_path = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(file_path):
@@ -418,6 +416,42 @@ async def download_file(filename: str):
             'Content-Length': str(file_size),
         }
     )
+
+@app.post('/api/file/download')
+async def download_file_post(request: Request):
+    """POST方式下载文件（更可靠，支持中文文件名）"""
+    import urllib.parse
+    try:
+        data = await request.json()
+        filename = data.get('file_name', '')
+        filename = os.path.basename(filename)
+        
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail='文件不存在')
+        
+        def iter_file():
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+        
+        file_size = os.path.getsize(file_path)
+        encoded_filename = urllib.parse.quote(filename)
+        return StreamingResponse(
+            iter_file(),
+            media_type='application/octet-stream',
+            headers={
+                'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}",
+                'Content-Length': str(file_size),
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ===== 管理界面HTML =====
@@ -597,7 +631,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-47 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-48 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -613,7 +647,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-47 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-48 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -1051,15 +1085,13 @@ class ServerGUI:
             local_ip = _get_local_ip()
             
             # 复制文件到uploads目录
-            import urllib.parse
             filename = os.path.basename(self.selected_file)
             dest_path = os.path.join(UPLOAD_DIR, filename)
             shutil.copy2(self.selected_file, dest_path)
             
             file_size = os.path.getsize(dest_path)
-            # URL编码文件名（支持中文）
-            encoded_filename = urllib.parse.quote(filename)
-            download_url = f'http://{local_ip}:8080/api/file/{encoded_filename}'
+            # 用POST下载接口，文件名在body中传递，支持中文
+            download_url = f'http://{local_ip}:8080/api/file/download'
             
             # 发送文件传输指令
             url = f'http://{local_ip}:8080/api/command'
@@ -1127,7 +1159,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-47')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-48')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

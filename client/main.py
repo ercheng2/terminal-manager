@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3-47
+坤展成终端管理系统 — 客户端 v1.3-48
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -1052,7 +1052,7 @@ class CommandHandler:
         return result
 
     def _download_file(self, task_id, file_name, file_size, download_url):
-        """后台下载文件"""
+        """后台下载文件（POST方式，支持中文文件名）"""
         import urllib.request
         import urllib.error
         
@@ -1065,10 +1065,6 @@ class CommandHandler:
         
         # 安全检查：文件名不能包含路径穿越
         file_name = os.path.basename(file_name)
-        if '..' in file_name or '/' in file_name or '\\' in file_name:
-            self.app.http_client.send_result(task_id, 'failed', '无效的文件名')
-            self.app.root.after(0, lambda: self.app._show_msg(f'文件传输失败: 无效的文件名'))
-            return
         
         # 创建下载目录
         try:
@@ -1084,8 +1080,11 @@ class CommandHandler:
             print(f'[文件传输] 开始下载: {file_name} ({file_size} bytes) -> {dest_path}')
             self.app.root.after(0, lambda: self.app._show_msg(f'正在接收文件: {file_name}'))
             
-            # 流式下载，不一次性读入内存
-            req = urllib.request.Request(download_url, headers={'User-Agent': 'KZC-Terminal-Manager'})
+            # 用POST请求下载，文件名在body中，支持中文
+            post_data = json.dumps({'file_name': file_name}).encode('utf-8')
+            req = urllib.request.Request(download_url, data=post_data, 
+                                        headers={'Content-Type': 'application/json', 'User-Agent': 'KZC-Terminal-Manager'},
+                                        method='POST')
             with urllib.request.urlopen(req, timeout=60) as resp:
                 total_read = 0
                 with open(dest_path, 'wb') as f:
@@ -1115,7 +1114,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-47')
+        self.root.title('坤展成终端管理系统 v1.3-48')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)
@@ -1199,7 +1198,7 @@ class TerminalApp:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-47',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-48',
                 font=('Microsoft YaHei', 15, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()

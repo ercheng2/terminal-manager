@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-51
+坤展成终端管理系统 — 服务器端 v1.3-52
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-51: 发送提示改状态栏+设备在线绿色+移除调试面板
+v1.3-52: 发送提示改状态栏+设备在线绿色+移除调试面板
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -650,7 +650,7 @@ class ServerGUI:
         icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
-        self.root.title('坤展成终端管理系统 v1.3-51 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-52 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -666,7 +666,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-51 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-52 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -771,6 +771,11 @@ class ServerGUI:
             row, col = i // 3, i % 3
             tk.Button(btn_grid, text=text, width=10, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
                      command=cmd).grid(row=row, column=col, padx=5, pady=5)
+        
+        # 远程控制状态提示
+        self.cmd_status_var = tk.StringVar(value='')
+        self.cmd_status_label = tk.Label(btn_frame, textvariable=self.cmd_status_var, font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
+        self.cmd_status_label.pack(fill='x', padx=10, pady=(0, 5))
         
         # 文件传输区域
         file_frame = tk.LabelFrame(right_frame, text=' 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
@@ -928,7 +933,9 @@ class ServerGUI:
     def _send_command(self, cmd):
         """发送命令到选中设备"""
         if not self.selected_client_id:
-            messagebox.showwarning('提示', '请先选择设备')
+            self.cmd_status_var.set('⚠️ 请先选择设备')
+            self.cmd_status_label.config(fg='#f39c12')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
             return
         
         import urllib.request
@@ -944,9 +951,13 @@ class ServerGUI:
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
-                messagebox.showinfo('成功', f'指令已发送: {cmd}')
+                self.cmd_status_var.set(f'✅ 指令已发送: {cmd}')
+                self.cmd_status_label.config(fg='#27ae60')
+                self.root.after(3000, lambda: self.cmd_status_var.set(''))
         except Exception as e:
-            messagebox.showerror('错误', f'发送失败: {e}')
+            self.cmd_status_var.set(f'❌ 发送失败: {e}')
+            self.cmd_status_label.config(fg='#e74c3c')
+            self.root.after(5000, lambda: self.cmd_status_var.set(''))
     
     def _cmd_shutdown(self):
         self._send_command('shutdown')
@@ -1072,7 +1083,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-51')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-52')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

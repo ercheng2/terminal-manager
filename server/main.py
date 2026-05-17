@@ -735,6 +735,10 @@ class RemoteDesktopViewer:
         
         # 当前显示的图片
         self.current_photo = None
+        self.current_img = None
+        self.offset_x = 0
+        self.offset_y = 0
+        self.screen_scale = 1.0
         self.frame_count = 0
         self.fps_timer = time.time()
         
@@ -811,20 +815,26 @@ class RemoteDesktopViewer:
             # 缩放适配Canvas大小
             cw = self.canvas.winfo_width()
             ch = self.canvas.winfo_height()
-            if cw > 1 and ch > 1:
-                iw, ih = img.size
+            iw, ih = img.size
+            
+            if cw > 100 and ch > 100:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
                 img = img.resize((new_w, new_h), Image.LANCZOS)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
+            else:
+                # Canvas还没渲染完，用原始尺寸
+                self.screen_scale = 1.0
+                self.offset_x = 0
+                self.offset_y = 0
             
             self.current_photo = ImageTk.PhotoImage(img)
             self.canvas.delete('all')
             self.canvas.create_image(self.offset_x, self.offset_y, anchor='nw', image=self.current_photo)
         except Exception as e:
-            pass
+            print(f'[远程桌面] 显示帧失败: {e}')
     
     def _canvas_to_client(self, cx, cy):
         """将Canvas坐标转换为客户端屏幕坐标"""

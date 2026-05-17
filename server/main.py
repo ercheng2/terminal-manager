@@ -772,11 +772,32 @@ class RemoteDesktopViewer:
             return None
     
     def _fetch_loop(self):
-        """TCP流接收线程——只负责收帧，放入解码队列"""
+        """帧获取——优先TCP流，失败自动回退HTTP"""
         import socket
         
         self._get_screen_info()
         self._notify_quality()
+        
+        # 尝试TCP流模式
+        tcp_ok = False
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.settimeout(3)
+            test_sock.connect((self.client_ip, 5902))
+            test_sock.close()
+            tcp_ok = True
+        except:
+            tcp_ok = False
+        
+        if tcp_ok:
+            self._fetch_tcp()
+        else:
+            self.win.after(0, lambda: self.status_var.set('HTTP模式'))
+            self._fetch_http()
+    
+    def _fetch_tcp(self):
+        """TCP流模式获取帧"""
+        import socket
         
         while self.running:
             try:
@@ -786,7 +807,7 @@ class RemoteDesktopViewer:
                 sock.connect((self.client_ip, 5902))
                 sock.settimeout(3)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
-                self.win.after(0, lambda: self.status_var.set('已连接'))
+                self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
                 
                 while self.running:
                     header = self._recv_exact(sock, 4)
@@ -811,7 +832,6 @@ class RemoteDesktopViewer:
                         self.frame_count = 0
                         self.fps_timer = now
                     
-                    # 放入解码队列（满则丢弃旧帧）
                     try:
                         self._decode_queue.put_nowait(frame_data)
                     except queue.Full:
@@ -824,12 +844,60 @@ class RemoteDesktopViewer:
             except Exception as e:
                 if not self.running:
                     break
-                self.win.after(0, lambda: self.status_var.set('连接中断，重连中...'))
-                time.sleep(2)
+                self.win.after(0, lambda: self.status_var.set('流断开，切HTTP...'))
+                time.sleep(1)
                 try:
                     sock.close()
                 except:
                     pass
+                # 回退到HTTP
+                self._fetch_http()
+                return
+    
+    def _fetch_http(self):
+        """HTTP模式获取帧（兼容回退）"""
+        self.win.after(0, lambda: self.status_var.set('已连接(HTTP)'))
+        
+        while self.running:
+            try:
+                quality = self.quality_var.get()
+                url = f'http://{self.client_ip}:5901/screen?quality={quality}'
+                
+                req = urllib.request.Request(url)
+                try:
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        if resp.status == 304:
+                            time.sleep(0.03)
+                            continue
+                        
+                        jpeg_data = resp.read()
+                        
+                        self.frame_count += 1
+                        now = time.time()
+                        if now - self.fps_timer >= 1.0:
+                            fps = self.frame_count / (now - self.fps_timer)
+                            self.win.after(0, lambda f=fps: self.fps_var.set(f'FPS: {f:.1f}'))
+                            self.frame_count = 0
+                            self.fps_timer = now
+                        
+                        try:
+                            self._decode_queue.put_nowait(jpeg_data)
+                        except queue.Full:
+                            try:
+                                self._decode_queue.get_nowait()
+                                self._decode_queue.put_nowait(jpeg_data)
+                            except queue.Empty:
+                                pass
+                except urllib.error.HTTPError as e:
+                    if e.code == 304:
+                        time.sleep(0.03)
+                        continue
+                    raise
+            except Exception as e:
+                if not self.running:
+                    break
+                self.win.after(0, lambda: self.status_var.set('HTTP重连中...'))
+                time.sleep(1)
     
     def _recv_exact(self, sock, n):
         """精确接收n字节数据"""

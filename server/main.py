@@ -699,7 +699,7 @@ class RemoteDesktopViewer:
         
         # 质量选择
         tk.Label(toolbar, text='画质:', fg='white', bg='#2c3e50', font=('Microsoft YaHei', 9)).pack(side='left', padx=(15, 2))
-        self.quality_var = tk.IntVar(value=75)
+        self.quality_var = tk.IntVar(value=85)
         self.quality_var.trace_add('write', lambda *args: self._notify_quality())
         quality_scale = tk.Scale(toolbar, from_=20, to=90, orient='horizontal', 
                                 variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
@@ -932,7 +932,6 @@ class RemoteDesktopViewer:
         """显示截图帧"""
         try:
             img = Image.open(io.BytesIO(jpeg_data))
-            self.current_img = img
             
             cw = self.canvas.winfo_width()
             ch = self.canvas.winfo_height()
@@ -951,8 +950,9 @@ class RemoteDesktopViewer:
                 self.offset_y = 0
             
             self.current_photo = ImageTk.PhotoImage(img)
-            self.canvas.delete('all')
-            self.canvas.create_image(self.offset_x, self.offset_y, anchor='nw', image=self.current_photo)
+            # 用itemconfig更新，比delete+create快5-10倍
+            self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+            self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
         except Exception as e:
             print(f'[远程桌面] 显示帧失败: {e}')
     

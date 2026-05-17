@@ -1182,7 +1182,7 @@ def _stream_frames(conn):
             # JPEG极速编码
             jpeg_buf.seek(0)
             jpeg_buf.truncate()
-            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, optimize=False)
             jpeg_data = jpeg_buf.getvalue()
             
             # 发送

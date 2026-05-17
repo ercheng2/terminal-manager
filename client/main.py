@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.2
+坤展成终端管理系统 — 客户端 v1.3
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -924,11 +924,21 @@ class HTTPClient:
         if not self.connected or not self.client_id:
             return
 
-        # 第二步：轮询指令
+        # 第二步：轮询指令 + 上报系统状态（合并为一个POST请求）
         try:
+            fresh_info = SystemInfo.get_info()
+            poll_data = json.dumps({
+                'client_id': self.client_id,
+                'cpu_percent': fresh_info.get('cpu_percent', 0),
+                'memory_percent': fresh_info.get('memory_percent', 0),
+                'disk_percent': fresh_info.get('disk_percent', 0),
+                'ip': fresh_info.get('ip', ''),
+            }).encode('utf-8')
             req = urllib.request.Request(
-                f'{base_url}/api/client/poll?client_id={self.client_id}',
-                method='GET'
+                f'{base_url}/api/client/poll',
+                data=poll_data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
@@ -942,29 +952,8 @@ class HTTPClient:
                             self._last_command_ids = set(list(self._last_command_ids)[-50:])
                         if self.on_command:
                             self.on_command(cmd)
-        except:
-            pass
-        
-        # 第三步：上报系统状态（POST，更可靠）
-        try:
-            fresh_info = SystemInfo.get_info()
-            status_data = json.dumps({
-                'client_id': self.client_id,
-                'cpu_percent': fresh_info.get('cpu_percent', 0),
-                'memory_percent': fresh_info.get('memory_percent', 0),
-                'disk_percent': fresh_info.get('disk_percent', 0),
-                'ip': fresh_info.get('ip', ''),
-            }).encode('utf-8')
-            req = urllib.request.Request(
-                f'{base_url}/api/client/status',
-                data=status_data,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                pass
-        except:
-            pass
+        except Exception as e:
+            print(f'[HTTP] 轮询失败: {e}')
 
     def send_result(self, task_id, status, msg=''):
         """发送指令执行结果"""

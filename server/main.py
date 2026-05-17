@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3
+坤展成终端管理系统 — 服务器端 v1.3-41
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
 """
@@ -254,22 +254,62 @@ async def client_register(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get('/api/client/poll')
-async def client_poll(client_id: str):
-    """客户端轮询指令"""
-    if client_id not in _clients:
-        raise HTTPException(status_code=400, detail='未注册')
+@app.post('/api/client/poll')
+async def client_poll(request: Request):
+    """客户端轮询指令 + 上报系统状态（合并为一个POST请求）"""
+    try:
+        data = await request.json()
+        client_id = data.get('client_id', '')
+        if client_id not in _clients:
+            raise HTTPException(status_code=400, detail='未注册')
+        
+        # 更新最后在线时间
+        _clients[client_id]['last_seen'] = datetime.datetime.now()
+        
+        # 更新系统状态
+        if 'cpu_percent' in data:
+            _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
+        if 'memory_percent' in data:
+            _clients[client_id]['memory_percent'] = float(data['memory_percent'])
+        if 'disk_percent' in data:
+            _clients[client_id]['disk_percent'] = float(data['disk_percent'])
+        if data.get('ip'):
+            _clients[client_id]['ip'] = data['ip']
+        
+        # 获取该客户端的待处理指令
+        commands = []
+        for tid, cmd in _commands.items():
+            if cmd.get('target_id') == client_id and cmd.get('status') == 'pending':
+                commands.append(cmd)
+        
+        return {'client_id': client_id, 'commands': commands}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    # 更新最后在线时间
-    _clients[client_id]['last_seen'] = datetime.datetime.now()
-
-    # 获取该客户端的待处理指令
-    commands = []
-    for tid, cmd in _commands.items():
-        if cmd.get('target_id') == client_id and cmd.get('status') == 'pending':
-            commands.append(cmd)
-
-    return {'client_id': client_id, 'commands': commands}
+@app.post('/api/client/status')
+async def client_status(request: Request):
+    """客户端上报系统状态（POST方式，更可靠）"""
+    try:
+        data = await request.json()
+        client_id = data.get('client_id', '')
+        if client_id not in _clients:
+            raise HTTPException(status_code=400, detail='未注册')
+        _clients[client_id]['last_seen'] = datetime.datetime.now()
+        if 'cpu_percent' in data:
+            _clients[client_id]['cpu_percent'] = float(data['cpu_percent'])
+        if 'memory_percent' in data:
+            _clients[client_id]['memory_percent'] = float(data['memory_percent'])
+        if 'disk_percent' in data:
+            _clients[client_id]['disk_percent'] = float(data['disk_percent'])
+        if data.get('ip'):
+            _clients[client_id]['ip'] = data['ip']
+        return {'success': True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post('/api/client/status')
 async def client_status(request: Request):
@@ -522,7 +562,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-40 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-41 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -750,6 +790,7 @@ class ServerGUI:
     
     def _update_device_detail(self, info):
         """更新设备详情"""
+        print(f'[GUI调试] 更新设备详情: cpu={info.get("cpu_percent", "N/A")}, mem={info.get("memory_percent", "N/A")}, disk={info.get("disk_percent", "N/A")}')
         self.detail_title.config(text=f'设备详情 - {info.get("hostname", "未知")}')
         
         # 基本信息

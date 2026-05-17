@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-57
+坤展成终端管理系统 — 服务器端 v1.3-58
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-57: 设备列表添加编辑名称功能
+v1.3-58: 设备列表添加编辑名称功能
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -1101,7 +1101,7 @@ class ServerGUI:
         alias = _device_alias.get(self.selected_client_id, '')
         display_name = f'{alias}（{hostname}）' if alias else hostname
         self.detail_title.config(text=f'设备详情 - {display_name}')
-        self.info_labels['hostname'].config(text=display_name)
+        self.info_labels['hostname'].config(text=hostname)
         for key, label in [('ip', 'IP地址'), ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
             self.info_labels[key].config(text=live_info.get(key, '-'))
         # mac 字段单独处理（使用Entry控件，需先切换状态再设置值）
@@ -1275,7 +1275,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-57')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-58')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-49
+坤展成终端管理系统 — 服务器端 v1.3-50
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-49: 修复中文文件名传输问题，使用UUID临时文件名避免编码问题
+v1.3-50: 发送提示改状态栏+设备在线绿色+移除调试面板
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -639,7 +639,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-49 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-50 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -655,7 +655,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-49 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-50 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -783,20 +783,6 @@ class ServerGUI:
         
         self.selected_file = None
         
-        # 诊断区域（调试用，后续可删除）
-        diag_frame = tk.LabelFrame(right_frame, text=' 调试信息 ', font=('Microsoft YaHei', 10, 'bold'))
-        diag_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        self.diag_text = tk.Text(diag_frame, height=8, font=('Consolas', 9), bg='#1a1a2e', fg='#0f0', wrap='word')
-        self.diag_text.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        diag_btn_frame = tk.Frame(diag_frame)
-        diag_btn_frame.pack(fill='x', padx=5, pady=(0, 5))
-        tk.Button(diag_btn_frame, text='API自测', bg='#e67e22', fg='white', 
-                 command=self._api_self_test).pack(side='left', padx=5)
-        tk.Button(diag_btn_frame, text='手动写入测试数据', bg='#9b59b6', fg='white',
-                 command=self._manual_test_data).pack(side='left', padx=5)
-        
         # 底部状态栏
         status_bar = tk.Frame(self.root, bg='#34495e', height=28)
         status_bar.pack(fill='x', side='bottom')
@@ -840,13 +826,19 @@ class ServerGUI:
             if online:
                 online_count += 1
             
+            # 根据在线状态设置卡片背景色
+            if online:
+                card_bg = '#abebc6' if cid == self.selected_client_id else '#d5f5e3'
+            else:
+                card_bg = '#e8f4f8' if cid == self.selected_client_id else 'white'
+            
             # 设备卡片
-            card = tk.Frame(self.device_list_frame, bg='white', relief='raised', bd=1)
+            card = tk.Frame(self.device_list_frame, bg=card_bg, relief='raised', bd=1)
             card.pack(fill='x', padx=5, pady=3)
             
             # 选中效果
             if cid == self.selected_client_id:
-                card.config(bg='#e8f4f8', relief='raised', bd=2)
+                card.config(relief='raised', bd=2)
             
             # 图标和状态
             icon = '🟢' if online else '⚫'
@@ -855,7 +847,7 @@ class ServerGUI:
             
             content = f'{icon} {hostname}\n   IP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
-                          bg='white' if cid != self.selected_client_id else '#e8f4f8',
+                          bg=card_bg,
                           anchor='w', justify='left')
             lbl.pack(fill='x', padx=8, pady=5)
             
@@ -865,7 +857,7 @@ class ServerGUI:
             for widget in [card, lbl]:
                 widget.bind('<Button-1>', lambda e, c=cid: on_click(c))
                 widget.bind('<Enter>', lambda e, w=card: w.config(cursor='hand2') if hasattr(w, 'config') else None)
-                widget.bind('<Leave>', lambda e, w=card, orig_bg='white': w.config(bg=orig_bg) if hasattr(w, 'config') else None)
+                widget.bind('<Leave>', lambda e, w=card, orig_bg=card_bg: w.config(bg=orig_bg) if hasattr(w, 'config') else None)
         
         # 更新状态栏
         local_ip = _get_local_ip()
@@ -876,45 +868,16 @@ class ServerGUI:
         # 如果有选中的设备，更新详情
         if self.selected_client_id and self.selected_client_id in _clients:
             self._update_device_detail()
-        
-        # 更新诊断信息
-        import json as _json
-        try:
-            diag_info = {}
-            for cid, info in _clients.items():
-                diag_info[cid] = {
-                    'hostname': info.get('hostname', '?'),
-                    'cpu_percent': info.get('cpu_percent', 'NOT_SET'),
-                    'memory_percent': info.get('memory_percent', 'NOT_SET'),
-                    'disk_percent': info.get('disk_percent', 'NOT_SET'),
-                    'type_cpu': str(type(info.get('cpu_percent', 'MISSING'))),
-                    'last_seen': str(info.get('last_seen', '?')),
-                }
-            self.diag_text.delete('1.0', 'end')
-            self.diag_text.insert('1.0', _json.dumps(diag_info, indent=2, ensure_ascii=False, default=str))
-        except Exception as e:
-            self.diag_text.delete('1.0', 'end')
-            self.diag_text.insert('1.0', f'诊断错误: {e}')
     
     def _select_device(self, cid):
         """选择设备"""
         self.selected_client_id = cid
         self._refresh_devices()  # 重新渲染以显示选中效果
     
-    def _append_diag(self, msg):
-        """向诊断面板追加信息"""
-        try:
-            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
-            self.diag_text.insert('end', f'\n[{timestamp}] {msg}')
-            self.diag_text.see('end')
-        except:
-            pass
-    
     def _update_device_detail(self, info=None):
         """更新设备详情 - 直接从_clients全局变量读取最新数据"""
         # 直接从全局变量读取最新数据，不依赖传入的info参数
         if not self.selected_client_id or self.selected_client_id not in _clients:
-            self._append_diag('未选中设备或设备不在线')
             return
         
         live_info = _clients[self.selected_client_id]
@@ -923,110 +886,33 @@ class ServerGUI:
         mem_raw = live_info.get('memory_percent', 0)
         disk_raw = live_info.get('disk_percent', 0)
         
-        self._append_diag(f'读取数据: cpu_raw={cpu_raw}, mem_raw={mem_raw}, disk_raw={disk_raw}')
-        
-        # 系统状态转换，加异常捕获
+        # 系统状态转换
         try:
             cpu = float(cpu_raw) if cpu_raw is not None else 0.0
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             cpu = 0.0
-            self._append_diag(f'CPU转换异常: {e}, raw={cpu_raw}')
         try:
             mem = float(mem_raw) if mem_raw is not None else 0.0
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             mem = 0.0
-            self._append_diag(f'MEM转换异常: {e}, raw={mem_raw}')
         try:
             disk = float(disk_raw) if disk_raw is not None else 0.0
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             disk = 0.0
-            self._append_diag(f'DISK转换异常: {e}, raw={disk_raw}')
-        
-        self._append_diag(f'转换后: cpu={cpu}, mem={mem}, disk={disk}')
         
         # 更新标题和基本信息
-        try:
-            self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
-            for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
-                              ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
-                self.info_labels[key].config(text=live_info.get(key, '-'))
-        except Exception as e:
-            self._append_diag(f'更新基本信息异常: {e}')
+        self.detail_title.config(text=f'设备详情 - {live_info.get("hostname", "未知")}')
+        for key, label in [('hostname', '主机名'), ('ip', 'IP地址'), ('mac', 'MAC地址'),
+                          ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
+            self.info_labels[key].config(text=live_info.get(key, '-'))
         
-        # 更新系统状态 - 用.set()替代.config(text=)，每步单独try/except
-        try:
-            cpu_text = f'{cpu:.1f}%'
-            self._append_diag(f'设置cpu_var.set({cpu_text})')
-            self.cpu_var.set(cpu_text)  # StringVar标准用法
-            self.cpu_progress['value'] = cpu
-        except Exception as e:
-            self._append_diag(f'设置CPU异常: {e}')
-        
-        try:
-            mem_text = f'{mem:.1f}%'
-            self._append_diag(f'设置mem_var.set({mem_text})')
-            self.mem_var.set(mem_text)  # StringVar标准用法
-            self.mem_progress['value'] = mem
-        except Exception as e:
-            self._append_diag(f'设置MEM异常: {e}')
-        
-        try:
-            disk_text = f'{disk:.1f}%'
-            self._append_diag(f'设置disk_var.set({disk_text})')
-            self.disk_var.set(disk_text)  # StringVar标准用法
-            self.disk_progress['value'] = disk
-        except Exception as e:
-            self._append_diag(f'设置DISK异常: {e}')
-        
-        # 强制刷新UI
-        try:
-            self.root.update_idletasks()
-            self._append_diag('UI刷新完成')
-        except:
-            pass
-    
-    def _api_self_test(self):
-        """向自己的API发送测试数据，验证poll接口是否正常"""
-        try:
-            import urllib.request
-            local_ip = _get_local_ip()
-            # 找到第一个客户端
-            if not _clients:
-                self.diag_text.insert('end', '\n--- 无客户端，无法自测 ---')
-                return
-            test_cid = list(_clients.keys())[0]
-            test_url = f'http://127.0.0.1:8080/api/client/poll?client_id={test_cid}&cpu_percent=88.8&memory_percent=77.7&disk_percent=66.6'
-            req = urllib.request.Request(test_url, method='GET')
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                result = json.loads(resp.read().decode('utf-8'))
-                self.diag_text.insert('end', f'\n--- API自测结果 ---\n请求: {test_url}\n响应: {json.dumps(result, ensure_ascii=False)}\n_clients中cpu={_clients[test_cid].get("cpu_percent")}, mem={_clients[test_cid].get("memory_percent")}, disk={_clients[test_cid].get("disk_percent")}')
-        except Exception as e:
-            self.diag_text.insert('end', f'\n--- API自测失败: {e} ---')
-
-    def _manual_test_data(self):
-        """手动往_clients写入测试数据，并直接设置StringVar验证"""
-        if not _clients:
-            self._append_diag('无客户端')
-            return
-        test_cid = list(_clients.keys())[0]
-        _clients[test_cid]['cpu_percent'] = 55.5
-        _clients[test_cid]['memory_percent'] = 44.4
-        _clients[test_cid]['disk_percent'] = 33.3
-        
-        # 直接设置StringVar验证控件是否响应
-        try:
-            self.cpu_var.set('55.5%')
-            self.mem_var.set('44.4%')
-            self.disk_var.set('33.3%')
-            self.cpu_progress['value'] = 55.5
-            self.mem_progress['value'] = 44.4
-            self.disk_progress['value'] = 33.3
-            self.root.update_idletasks()
-            self._append_diag(f'直接设置StringVar: cpu=55.5%, mem=44.4%, disk=33.3%')
-        except Exception as e:
-            self._append_diag(f'直接设置StringVar异常: {e}')
-        
-        self._refresh_devices()
+        # 更新系统状态
+        self.cpu_var.set(f'{cpu:.1f}%')
+        self.cpu_progress['value'] = cpu
+        self.mem_var.set(f'{mem:.1f}%')
+        self.mem_progress['value'] = mem
+        self.disk_var.set(f'{disk:.1f}%')
+        self.disk_progress['value'] = disk
     
     def _send_command(self, cmd):
         """发送命令到选中设备"""
@@ -1079,11 +965,13 @@ class ServerGUI:
     def _send_file(self):
         """发送文件到选中设备"""
         if not self.selected_client_id:
-            messagebox.showwarning('提示', '请先选择设备')
+            self.transfer_status_var.set('⚠️ 请先选择设备')
+            self.root.after(3000, lambda: self.transfer_status_var.set('就绪'))
             return
         
         if not self.selected_client_id or not self.selected_file:
-            messagebox.showwarning('提示', '请选择文件和目标设备')
+            self.transfer_status_var.set('⚠️ 请选择文件和目标设备')
+            self.root.after(3000, lambda: self.transfer_status_var.set('就绪'))
             return
         
         import urllib.request
@@ -1122,12 +1010,11 @@ class ServerGUI:
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
-                self.transfer_status_var.config(text=f'发送中: {filename}', fg='#f39c12')
-                messagebox.showinfo('成功', f'文件发送指令已下发: {filename}')
-                self.transfer_status_var.config(text=f'已发送: {filename}', fg='#27ae60')
+                self.transfer_status_var.set(f'✅ 发送成功: {filename}')
+                self.root.after(3000, lambda: self.transfer_status_var.set('就绪'))
         except Exception as e:
-            self.transfer_status_var.config(text=f'发送失败: {e}', fg='#e74c3c')
-            messagebox.showerror('错误', f'发送失败: {e}')
+            self.transfer_status_var.set(f'❌ 发送失败: {e}')
+            self.root.after(5000, lambda: self.transfer_status_var.set('就绪'))
     
     def run(self):
         self.root.mainloop()
@@ -1174,7 +1061,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-49')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-50')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

@@ -763,8 +763,13 @@ class ServerGUI:
         for i, (label, key) in enumerate(fields):
             row, col = i // 2, (i % 2) * 2
             tk.Label(info_grid, text=f'{label}：', font=('Microsoft YaHei', 9), anchor='e', width=10).grid(row=row, column=col, sticky='e', pady=2)
-            self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=25, relief='sunken', bg='white')
-            self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
+            if key == 'mac':
+                self.info_labels[key] = tk.Entry(info_grid, font=('Microsoft YaHei', 9), width=25, relief='sunken', bg='white')
+                self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
+                self.info_labels[key].config(state='readonly')
+            else:
+                self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=25, relief='sunken', bg='white')
+                self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
         
         # 系统状态区域
         status_frame = tk.LabelFrame(right_frame, text=' 系统状态 ', font=('Microsoft YaHei', 10, 'bold'))
@@ -1039,9 +1044,14 @@ class ServerGUI:
         display_name = f'{alias}（{hostname}）' if alias else hostname
         self.detail_title.config(text=f'设备详情 - {display_name}')
         self.info_labels['hostname'].config(text=display_name)
-        for key, label in [('ip', 'IP地址'), ('mac', 'MAC地址'),
-                          ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
+        for key, label in [('ip', 'IP地址'), ('os', '操作系统'), ('os_version', '系统版本'), ('arch', '架构')]:
             self.info_labels[key].config(text=live_info.get(key, '-'))
+        # mac 字段单独处理（使用Entry控件，需先切换状态再设置值）
+        mac_value = live_info.get('mac', '-')
+        self.info_labels['mac'].config(state='normal')
+        self.info_labels['mac'].delete(0, 'end')
+        self.info_labels['mac'].insert(0, mac_value)
+        self.info_labels['mac'].config(state='readonly')
         
         # 更新系统状态
         self.cpu_var.set(f'{cpu:.1f}%')

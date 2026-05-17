@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 客户端 v1.3
+坤展成终端管理系统 — 客户端 v1.3-43
 基于HTTP轮询通信，更稳定可靠
 """
 
@@ -934,6 +934,8 @@ class HTTPClient:
             
             # 使用URL参数传递系统状态
             poll_url = f'{base_url}/api/client/poll?client_id={self.client_id}&cpu_percent={cpu}&memory_percent={mem}&disk_percent={disk}&ip={client_ip}'
+            print(f'[轮询] URL: {poll_url}')
+            print(f'[轮询] 系统状态: cpu={cpu}, mem={mem}, disk={disk}')
             req = urllib.request.Request(poll_url, method='GET')
             
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -1113,7 +1115,7 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-42')
+        self.root.title('坤展成终端管理系统 v1.3-43')
         self.root.geometry('800x680')
         self.root.resizable(True, True)
         self.root.minsize(800, 680)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-42
+坤展成终端管理系统 — 服务器端 v1.3-43
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
 """
@@ -591,7 +591,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-42 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.3-43 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -735,6 +735,20 @@ class ServerGUI:
         
         self.selected_file = None
         
+        # 诊断区域（调试用，后续可删除）
+        diag_frame = tk.LabelFrame(right_frame, text=' 调试信息 ', font=('Microsoft YaHei', 10, 'bold'))
+        diag_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        self.diag_text = tk.Text(diag_frame, height=8, font=('Consolas', 9), bg='#1a1a2e', fg='#0f0', wrap='word')
+        self.diag_text.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        diag_btn_frame = tk.Frame(diag_frame)
+        diag_btn_frame.pack(fill='x', padx=5, pady=(0, 5))
+        tk.Button(diag_btn_frame, text='API自测', bg='#e67e22', fg='white', 
+                 command=self._api_self_test).pack(side='left', padx=5)
+        tk.Button(diag_btn_frame, text='手动写入测试数据', bg='#9b59b6', fg='white',
+                 command=self._manual_test_data).pack(side='left', padx=5)
+        
         # 底部状态栏
         status_bar = tk.Frame(self.root, bg='#34495e', height=28)
         status_bar.pack(fill='x', side='bottom')
@@ -814,6 +828,25 @@ class ServerGUI:
         # 如果有选中的设备，更新详情
         if self.selected_client_id and self.selected_client_id in clients_copy:
             self._update_device_detail(clients_copy[self.selected_client_id])
+        
+        # 更新诊断信息
+        import json as _json
+        try:
+            diag_info = {}
+            for cid, info in _clients.items():
+                diag_info[cid] = {
+                    'hostname': info.get('hostname', '?'),
+                    'cpu_percent': info.get('cpu_percent', 'NOT_SET'),
+                    'memory_percent': info.get('memory_percent', 'NOT_SET'),
+                    'disk_percent': info.get('disk_percent', 'NOT_SET'),
+                    'type_cpu': str(type(info.get('cpu_percent', 'MISSING'))),
+                    'last_seen': str(info.get('last_seen', '?')),
+                }
+            self.diag_text.delete('1.0', 'end')
+            self.diag_text.insert('1.0', _json.dumps(diag_info, indent=2, ensure_ascii=False, default=str))
+        except Exception as e:
+            self.diag_text.delete('1.0', 'end')
+            self.diag_text.insert('1.0', f'诊断错误: {e}')
     
     def _select_device(self, cid):
         """选择设备"""
@@ -855,6 +888,36 @@ class ServerGUI:
         self.mem_progress['value'] = mem
         self.disk_var.config(text=f'{disk:.1f}%')
         self.disk_progress['value'] = disk
+    
+    def _api_self_test(self):
+        """向自己的API发送测试数据，验证poll接口是否正常"""
+        try:
+            import urllib.request
+            local_ip = _get_local_ip()
+            # 找到第一个客户端
+            if not _clients:
+                self.diag_text.insert('end', '\n--- 无客户端，无法自测 ---')
+                return
+            test_cid = list(_clients.keys())[0]
+            test_url = f'http://127.0.0.1:8080/api/client/poll?client_id={test_cid}&cpu_percent=88.8&memory_percent=77.7&disk_percent=66.6'
+            req = urllib.request.Request(test_url, method='GET')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                self.diag_text.insert('end', f'\n--- API自测结果 ---\n请求: {test_url}\n响应: {json.dumps(result, ensure_ascii=False)}\n_clients中cpu={_clients[test_cid].get("cpu_percent")}, mem={_clients[test_cid].get("memory_percent")}, disk={_clients[test_cid].get("disk_percent")}')
+        except Exception as e:
+            self.diag_text.insert('end', f'\n--- API自测失败: {e} ---')
+
+    def _manual_test_data(self):
+        """手动往_clients写入测试数据，验证GUI显示是否正常"""
+        if not _clients:
+            self.diag_text.insert('end', '\n--- 无客户端 ---')
+            return
+        test_cid = list(_clients.keys())[0]
+        _clients[test_cid]['cpu_percent'] = 55.5
+        _clients[test_cid]['memory_percent'] = 44.4
+        _clients[test_cid]['disk_percent'] = 33.3
+        self.diag_text.insert('end', f'\n--- 手动写入: cpu=55.5, mem=44.4, disk=33.3 ---\n当前值: cpu={_clients[test_cid].get("cpu_percent")}, mem={_clients[test_cid].get("memory_percent")}, disk={_clients[test_cid].get("disk_percent")}')
+        self._refresh_devices()
     
     def _send_command(self, cmd):
         """发送命令到选中设备"""

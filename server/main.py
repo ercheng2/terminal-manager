@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-55
+坤展成终端管理系统 — 服务器端 v1.3-56
 基于HTTP轮询通信，更稳定可靠
 支持tkinter桌面GUI + 文件传输功能
-v1.3-55: 设备列表添加编辑名称功能
+v1.3-56: 设备列表添加编辑名称功能
 """
 
 import os, sys, json, time, datetime, uuid, threading
@@ -923,26 +923,41 @@ class ServerGUI:
                           anchor='w', justify='left')
             lbl.pack(side='left', fill='x', padx=(0, 0), pady=5)
             
+            # 右侧按钮区
+            btn_frame = tk.Frame(card, bg=card_bg)
+            btn_frame.pack(side='right', padx=(0, 8), pady=5)
+            
+            # 删除按钮
+            del_btn = tk.Label(btn_frame, text='✖', font=('Microsoft YaHei', 10), 
+                               bg=card_bg, fg='#e74c3c', cursor='hand2')
+            del_btn.pack(side='right', padx=(4, 0))
+            
             # 编辑按钮
-            edit_btn = tk.Label(card, text='✏️', font=('Microsoft YaHei', 10), 
+            edit_btn = tk.Label(btn_frame, text='✏️', font=('Microsoft YaHei', 10), 
                                bg=card_bg, cursor='hand2')
-            edit_btn.pack(side='right', padx=(0, 8), pady=5)
+            edit_btn.pack(side='right')
             
             def on_edit(event, cid=cid):
                 self._edit_device_alias(cid)
             edit_btn.bind('<Button-1>', on_edit)
             
+            def on_delete(event, cid=cid):
+                self._delete_device(cid)
+            del_btn.bind('<Button-1>', on_delete)
+            del_btn.bind('<Enter>', lambda e, w=del_btn: w.config(bg='#fadbd8'))
+            del_btn.bind('<Leave>', lambda e, w=del_btn, orig_bg=card_bg: w.config(bg=orig_bg))
+            
             # 绑定点击事件
             def on_click(cid=cid):
                 self._select_device(cid)
-            for widget in [card, lbl, dot_canvas]:
+            for widget in [card, lbl, dot_canvas, btn_frame]:
                 widget.bind('<Button-1>', lambda e, c=cid: on_click(c))
                 widget.bind('<Enter>', lambda e, w=card: w.config(cursor='hand2') if hasattr(w, 'config') else None)
-                widget.bind('<Leave>', lambda e, w=card, eb=edit_btn, dc=dot_canvas, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), dc.config(bg=orig_bg)) if hasattr(w, 'config') else None)
+                widget.bind('<Leave>', lambda e, w=card, eb=edit_btn, db=del_btn, dc=dot_canvas, bf=btn_frame, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), db.config(bg=orig_bg), dc.config(bg=orig_bg), bf.config(bg=orig_bg)) if hasattr(w, 'config') else None)
             
             # edit_btn 悬停效果
             edit_btn.bind('<Enter>', lambda e, w=card, eb=edit_btn: (w.config(cursor='hand2'), eb.config(bg='#f0f0f0')))
-            edit_btn.bind('<Leave>', lambda e, w=card, eb=edit_btn, dc=dot_canvas, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), dc.config(bg=orig_bg)))
+            edit_btn.bind('<Leave>', lambda e, w=card, eb=edit_btn, db=del_btn, dc=dot_canvas, bf=btn_frame, orig_bg=card_bg: (w.config(bg=orig_bg), eb.config(bg=orig_bg), db.config(bg=orig_bg), dc.config(bg=orig_bg), bf.config(bg=orig_bg)))
         
         # 更新状态栏
         local_ip = _get_local_ip()
@@ -1012,6 +1027,45 @@ class ServerGUI:
         
         entry.bind('<Return>', lambda e: on_confirm())
         entry.bind('<Escape>', lambda e: on_cancel())
+    
+    def _delete_device(self, cid):
+        """删除设备"""
+        hostname = _clients.get(cid, {}).get('hostname', cid)
+        alias = _device_alias.get(cid, '')
+        display = alias if alias else hostname
+        # 确认弹窗
+        dialog = tk.Toplevel(self.root)
+        dialog.title('删除设备')
+        dialog.geometry('300x110')
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 110) // 2
+        dialog.geometry(f'+{x}+{y}')
+        
+        tk.Label(dialog, text=f'确定删除设备 "{display}" ？', font=('Microsoft YaHei', 10)).pack(pady=(15, 10))
+        
+        def on_confirm():
+            if cid in _clients:
+                del _clients[cid]
+            if cid in _device_alias:
+                del _device_alias[cid]
+                _save_device_alias()
+            if self.selected_client_id == cid:
+                self.selected_client_id = None
+            dialog.destroy()
+            self._refresh_devices()
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=5)
+        tk.Button(btn_frame, text='删除', width=8, bg='#e74c3c', fg='white', command=on_confirm).pack(side='left', padx=5)
+        tk.Button(btn_frame, text='取消', width=8, command=on_cancel).pack(side='left', padx=5)
     
     def _update_device_detail(self, info=None):
         """更新设备详情 - 直接从_clients全局变量读取最新数据"""
@@ -1218,7 +1272,7 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-55')
+    print('  坤展成终端管理系统 — 服务器端 v1.3-56')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')

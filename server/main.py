@@ -873,7 +873,7 @@ class RemoteDesktopViewer:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.BILINEAR)
+                img = img.resize((new_w, new_h), Image.NEAREST)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             else:

@@ -726,8 +726,10 @@ class RemoteDesktopViewer:
                 bg='#ecf0f1', anchor='w').pack(fill='x')
         
         # 绑定键鼠事件
-        self.canvas.bind('<Button-1>', self._on_mouse_click)
-        self.canvas.bind('<Button-3>', self._on_mouse_right_click)
+        self.canvas.bind('<Button-1>', self._on_mouse_press)
+        self.canvas.bind('<ButtonRelease-1>', self._on_mouse_release)
+        self.canvas.bind('<Button-3>', self._on_mouse_right_press)
+        self.canvas.bind('<ButtonRelease-3>', self._on_mouse_right_release)
         self.canvas.bind('<Double-Button-1>', self._on_mouse_double_click)
         self.canvas.bind('<B1-Motion>', self._on_mouse_drag)
         self.canvas.bind('<Motion>', self._on_mouse_move)
@@ -1061,21 +1063,30 @@ class RemoteDesktopViewer:
             except:
                 pass
     
-    def _on_mouse_click(self, event):
+    def _on_mouse_press(self, event):
         x, y = self._canvas_to_client(event.x, event.y)
-        self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'left', 'clicks': 1})
+        self._send_input({'input_type': 'mouse_press', 'x': x, 'y': y, 'button': 'left'})
     
-    def _on_mouse_right_click(self, event):
+    def _on_mouse_release(self, event):
         x, y = self._canvas_to_client(event.x, event.y)
-        self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'right', 'clicks': 1})
+        self._send_input({'input_type': 'mouse_release', 'x': x, 'y': y, 'button': 'left'})
+    
+    def _on_mouse_right_press(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_press', 'x': x, 'y': y, 'button': 'right'})
+    
+    def _on_mouse_right_release(self, event):
+        x, y = self._canvas_to_client(event.x, event.y)
+        self._send_input({'input_type': 'mouse_release', 'x': x, 'y': y, 'button': 'right'})
     
     def _on_mouse_double_click(self, event):
         x, y = self._canvas_to_client(event.x, event.y)
         self._send_input({'input_type': 'mouse_click', 'x': x, 'y': y, 'button': 'left', 'clicks': 2})
     
     def _on_mouse_drag(self, event):
+        # 拖动时只发坐标移动，press已经在之前发了
         x, y = self._canvas_to_client(event.x, event.y)
-        self._send_input({'input_type': 'mouse_drag', 'x': x, 'y': y, 'button': 'left'})
+        self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
     
     def _on_mouse_move(self, event):
         now = time.time()

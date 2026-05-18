@@ -1096,6 +1096,14 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 if input_type == 'mouse_move':
                     x, y = input_data.get('x', 0), input_data.get('y', 0)
                     pyautogui.moveTo(x, y, _pause=False)
+                elif input_type == 'mouse_press':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    button = input_data.get('button', 'left')
+                    pyautogui.mouseDown(x, y, button=button, _pause=False)
+                elif input_type == 'mouse_release':
+                    x, y = input_data.get('x', 0), input_data.get('y', 0)
+                    button = input_data.get('button', 'left')
+                    pyautogui.mouseUp(x, y, button=button, _pause=False)
                 elif input_type == 'mouse_click':
                     x, y = input_data.get('x', 0), input_data.get('y', 0)
                     button = input_data.get('button', 'left')
@@ -1104,7 +1112,7 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 elif input_type == 'mouse_drag':
                     x, y = input_data.get('x', 0), input_data.get('y', 0)
                     button = input_data.get('button', 'left')
-                    pyautogui.dragTo(x, y, button=button, _pause=False)
+                    pyautogui.moveTo(x, y, _pause=False)
                 elif input_type == 'scroll':
                     x, y = input_data.get('x', 0), input_data.get('y', 0)
                     delta = input_data.get('delta', 0)
@@ -1328,6 +1336,14 @@ class CommandHandler:
                 if input_type == 'mouse_move':
                     x, y = data.get('x', 0), data.get('y', 0)
                     pyautogui.moveTo(x, y, _pause=False)
+                elif input_type == 'mouse_press':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    button = data.get('button', 'left')
+                    pyautogui.mouseDown(x, y, button=button, _pause=False)
+                elif input_type == 'mouse_release':
+                    x, y = data.get('x', 0), data.get('y', 0)
+                    button = data.get('button', 'left')
+                    pyautogui.mouseUp(x, y, button=button, _pause=False)
                 elif input_type == 'mouse_click':
                     x, y = data.get('x', 0), data.get('y', 0)
                     button = data.get('button', 'left')
@@ -1336,7 +1352,7 @@ class CommandHandler:
                 elif input_type == 'mouse_drag':
                     x, y = data.get('x', 0), data.get('y', 0)
                     button = data.get('button', 'left')
-                    pyautogui.dragTo(x, y, button=button, _pause=False)
+                    pyautogui.moveTo(x, y, _pause=False)
                 elif input_type == 'scroll':
                     x, y = data.get('x', 0), data.get('y', 0)
                     delta = data.get('delta', 0)

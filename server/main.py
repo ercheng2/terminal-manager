@@ -932,23 +932,38 @@ class RemoteDesktopViewer:
                         self._latest_img = img
     
     def _decode_and_scale(self, jpeg_data):
-        """后台线程：JPEG解码+缩放（用draft在解码阶段降采样，比解码后resize快5-8倍）"""
+        """后台线程：JPEG解码+缩放（draft降采样+resize补齐）"""
         try:
             img = Image.open(io.BytesIO(jpeg_data))
-            iw, ih = img.size
+            iw, ih = img.size  # 原始尺寸
             cw, ch = self._canvas_size
             
             if cw > 100 and ch > 100:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                # draft在JPEG解码阶段就降采样，比解码后resize快5-8倍
-                if abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02:
+                
+                need_scale = abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02
+                
+                if need_scale:
+                    # 尝试draft（JPEG解码阶段降采样，快5-8倍，但只支持2的幂次缩小）
+                    drafted = False
                     try:
                         img.draft('RGB', (new_w, new_h))
                         img.load()
+                        dw, dh = img.size
+                        # draft成功且尺寸确实变小了
+                        if dw < iw or dh < ih:
+                            drafted = True
+                            # draft后可能还需微调（draft只做2x/4x缩小）
+                            if abs(dw - new_w) > 2 or abs(dh - new_h) > 2:
+                                img = img.resize((new_w, new_h), Image.BILINEAR)
                     except:
+                        pass
+                    
+                    if not drafted:
                         img = img.resize((new_w, new_h), Image.BILINEAR)
+                
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             

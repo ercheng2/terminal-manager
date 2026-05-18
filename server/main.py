@@ -693,13 +693,13 @@ class RemoteDesktopViewer:
         self.win.geometry('1024x700')
         self.win.protocol('WM_DELETE_WINDOW', self._on_close)
         
-        # 根据显示模式设置窗口
+        # 根据显示模式设置窗口（延迟执行，确保窗口已绘制）
         if display_mode == '全屏':
-            self.win.attributes('-fullscreen', True)
+            self.win.after(100, lambda: self.win.attributes('-fullscreen', True))
             self._is_fullscreen = True
         else:
             # 最大化窗口 - 有标题栏和关闭按钮
-            self.win.state('zoomed')
+            self.win.after(100, lambda: self.win.state('zoomed'))
         
         # 工具栏
         toolbar = tk.Frame(self.win, bg='#2c3e50')

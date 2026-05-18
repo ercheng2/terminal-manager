@@ -316,7 +316,8 @@ async def client_register(request: Request):
 @app.get('/api/client/poll')
 async def client_poll_get(client_id: str, cpu_percent: float = 0, memory_percent: float = 0, disk_percent: float = 0, ip: str = ''):
     """客户端轮询指令（GET方式，兼容旧客户端）"""
-    print(f'[轮询-GET] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
+    # 轮询日志频率高，只在状态变化时打印
+    # print(f'[轮询-GET] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
     return await _client_poll_impl(client_id, cpu_percent, memory_percent, disk_percent, ip)
 
 @app.post('/api/client/poll')
@@ -329,7 +330,7 @@ async def client_poll_post(request: Request):
         memory_percent = data.get('memory_percent', 0)
         disk_percent = data.get('disk_percent', 0)
         ip = data.get('ip', '')
-        print(f'[轮询-POST] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
+        # print(f'[轮询-POST] client_id={client_id}, cpu={cpu_percent}, mem={memory_percent}, disk={disk_percent}')
         return await _client_poll_impl(client_id, cpu_percent, memory_percent, disk_percent, ip)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

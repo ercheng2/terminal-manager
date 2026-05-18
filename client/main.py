@@ -875,7 +875,7 @@ class HTTPClient:
         self.connected = False
         self.running = False
         self.on_command = on_command
-        self.poll_interval = 3  # 3秒轮询一次
+        self.poll_interval = 0.5  # 0.5秒轮询，确保指令实时响应
         self._thread = None
         self.client_id = ''  # 服务器分配的客户端ID
         self._last_command_ids = set()  # 已处理的指令ID
@@ -958,8 +958,6 @@ class HTTPClient:
             
             # 使用URL参数传递系统状态
             poll_url = f'{base_url}/api/client/poll?client_id={self.client_id}&cpu_percent={cpu}&memory_percent={mem}&disk_percent={disk}&ip={client_ip}'
-            print(f'[轮询] URL: {poll_url}')
-            print(f'[轮询] 系统状态: cpu={cpu}, mem={mem}, disk={disk}')
             req = urllib.request.Request(poll_url, method='GET')
             
             with urllib.request.urlopen(req, timeout=5) as resp:

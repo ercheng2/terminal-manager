@@ -1320,6 +1320,14 @@ class ServerGUI:
             prog.grid(row=0, column=i*3+2, padx=2)
             setattr(self, f'{var_name.replace("_var","")}_progress', prog)
         
+        # 远程桌面大按钮（独立醒目）
+        rdp_frame = tk.Frame(right_frame)
+        rdp_frame.pack(fill='x', padx=10, pady=(5, 0))
+        tk.Button(rdp_frame, text='🖥️  远程桌面', bg='#8e44ad', fg='white',
+                 font=('Microsoft YaHei', 13, 'bold'), command=self._cmd_remote_desktop,
+                 height=1, cursor='hand2', activebackground='#7d3c98', activeforeground='white'
+                 ).pack(fill='x', pady=2)
+        
         # 操作按钮区域（远程控制 + 文件传输 左右并排）
         action_row = tk.Frame(right_frame)
         action_row.pack(fill='x', padx=10, pady=5)
@@ -1331,11 +1339,6 @@ class ServerGUI:
         ctrl_grid = tk.Frame(ctrl_frame)
         ctrl_grid.pack(padx=8, pady=6)
         
-        # 远程桌面大按钮
-        tk.Button(ctrl_grid, text='远程桌面', width=10, bg='#8e44ad', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._cmd_remote_desktop
-                 ).grid(row=0, column=0, columnspan=3, pady=3)
-        
         # 系统控制按钮
         ctrl_buttons = [
             ('关机', '#e74c3c', self._cmd_shutdown),
@@ -1346,7 +1349,7 @@ class ServerGUI:
             ('音量-', '#3498db', self._cmd_volume_down),
         ]
         for i, (text, color, cmd) in enumerate(ctrl_buttons):
-            row, col = 1 + i // 3, i % 3
+            row, col = i // 3, i % 3
             tk.Button(ctrl_grid, text=text, width=8, bg=color, fg='white',
                      font=('Microsoft YaHei', 9, 'bold'), command=cmd
                      ).grid(row=row, column=col, padx=3, pady=2)
@@ -1511,7 +1514,7 @@ class ServerGUI:
                           anchor='w', justify='left')
             lbl.pack(side='left', fill='x', padx=(0, 0), pady=5)
             
-            # 右侧按钮区
+            # 右侧按钮区（先pack，保证固定右侧位置）
             btn_frame = tk.Frame(card, bg=card_bg)
             btn_frame.pack(side='right', padx=(0, 8), pady=5)
             
@@ -1525,7 +1528,7 @@ class ServerGUI:
                                bg=card_bg, cursor='hand2')
             edit_btn.pack(side='right')
             
-            # 别名标签（编辑按钮左边）
+            # 别名标签（编辑按钮左边，确保显示完整）
             if alias:
                 alias_label = tk.Label(btn_frame, text=alias, font=('Microsoft YaHei', 10, 'bold'), 
                                       bg=card_bg, fg='#2c3e50', anchor='e')

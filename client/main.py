@@ -875,7 +875,7 @@ class HTTPClient:
         self.connected = False
         self.running = False
         self.on_command = on_command
-        self.poll_interval = 0.5  # 0.5秒轮询，确保指令实时响应
+        self.poll_interval = 0.2  # 0.2秒轮询，近实时响应
         self._thread = None
         self.client_id = ''  # 服务器分配的客户端ID
         self._last_command_ids = set()  # 已处理的指令ID
@@ -899,7 +899,10 @@ class HTTPClient:
                 time.sleep(2)
                 continue
             try:
-                self._register_and_poll()
+                has_commands = self._register_and_poll()
+                # 收到指令后立刻再轮询，不等间隔，确保连续指令不丢
+                if has_commands:
+                    continue
             except Exception as e:
                 self.connected = False
                 print(f'[HTTP] 通信失败: {e}')
@@ -907,7 +910,7 @@ class HTTPClient:
                 time.sleep(self.poll_interval)
 
     def _register_and_poll(self):
-        """注册并轮询指令"""
+        """注册并轮询指令，返回是否收到指令"""
         base_url = f'http://{self.server_ip}:{self.server_port}'
         
         # 第一步：注册
@@ -963,15 +966,18 @@ class HTTPClient:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 commands = result.get('commands', [])
+                has_new = False
                 for cmd in commands:
                     cmd_id = cmd.get('id', '')
                     if cmd_id not in self._last_command_ids:
                         self._last_command_ids.add(cmd_id)
+                        has_new = True
                         # 只保留最近100个
                         if len(self._last_command_ids) > 100:
                             self._last_command_ids = set(list(self._last_command_ids)[-50:])
                         if self.on_command:
                             self.on_command(cmd)
+                return has_new
         except urllib.error.HTTPError as e:
             if e.code == 400:
                 # 未注册，标记需要重新注册
@@ -979,6 +985,7 @@ class HTTPClient:
                 print(f'[HTTP] 需要重新注册')
         except Exception as e:
             print(f'[HTTP] 轮询失败: {e}')
+        return False
 
     def send_result(self, task_id, status, msg=''):
         """发送指令执行结果"""

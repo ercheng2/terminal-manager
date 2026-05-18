@@ -83,8 +83,12 @@ def save_devices(data):
 # ===== FastAPI =====
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title='坤展成终端管理系统')
+
+# 挂载静态文件目录
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 内存中的数据
 _clients = {}  # client_id -> client_info
@@ -496,6 +500,43 @@ async def download_file_post(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# ===== 文件上传API =====
+@app.post("/api/file/upload")
+async def upload_file(request: Request):
+    """文件上传接口（支持大文件）"""
+    try:
+        import uuid as _uuid
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="未上传文件")
+        
+        # 获取原始文件名
+        original_name = file.filename or "unknown"
+        ext = os.path.splitext(original_name)[1]
+        # 生成UUID文件名避免中文和特殊字符问题
+        uuid_name = f'{_uuid.uuid4().hex[:12]}{ext}'
+        
+        # 保存到uploads目录
+        file_path = os.path.join(UPLOAD_DIR, uuid_name)
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # 保存文件名映射
+        _file_name_map[uuid_name] = original_name
+        
+        return {
+            "success": True,
+            "server_file_name": uuid_name,
+            "original_name": original_name,
+            "file_size": len(content)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ===== 管理界面HTML =====
 MANAGER_HTML = '''<!DOCTYPE html>
@@ -668,6 +709,773 @@ setInterval(refresh, 10000);
 </script>
 </body>
 </html>'''
+
+
+# ===== 赛博朋克风格管理界面HTML =====
+CYBER_HTML = '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>坤展成终端管理系统v1.4.0-服务器端</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    font-family: 'Microsoft YaHei', 'Consolas', sans-serif;
+    background: #0a0e1a;
+}
+.bg-container {
+    position: fixed;
+    top: 0; left: 0;
+    width: 1920px; height: 1080px;
+    background: url('/static/bg.jpg') no-repeat center center;
+    background-size: cover;
+    z-index: 0;
+}
+.main-content {
+    position: absolute;
+    top: 0; left: 0;
+    width: 1920px; height: 1080px;
+    z-index: 1;
+}
+
+/* 标题区 */
+.title-area {
+    position: absolute;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    white-space: nowrap;
+}
+.title-area h1 {
+    font-size: 32px;
+    font-weight: bold;
+    color: #00d4ff;
+    text-shadow: 0 0 20px #00d4ff, 0 0 40px #0066ff;
+    letter-spacing: 4px;
+    margin-bottom: 6px;
+}
+.title-area .subtitle {
+    font-size: 14px;
+    color: #7aa8cc;
+    letter-spacing: 2px;
+}
+
+/* 三个圆形数据模块 */
+.stats-row {
+    position: absolute;
+    top: 90px;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 120px;
+}
+.stat-ring {
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+.stat-ring::before {
+    content: '';
+    position: absolute;
+    top: -8px; left: -8px; right: -8px; bottom: -8px;
+    border-radius: 50%;
+    background: conic-gradient(var(--ring-color) var(--percent, 0%), transparent var(--percent, 0%));
+    opacity: 0.6;
+    z-index: -1;
+}
+.stat-ring::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    border-radius: 50%;
+    border: 3px solid var(--ring-color);
+    box-shadow: 0 0 20px var(--ring-color), inset 0 0 20px var(--ring-color);
+}
+.stat-ring.online { --ring-color: #00ff88; }
+.stat-ring.offline { --ring-color: #ff4466; }
+.stat-ring.total { --ring-color: #00aaff; }
+.stat-ring .value {
+    font-size: 48px;
+    font-weight: bold;
+    font-family: 'Consolas', monospace;
+    color: white;
+    text-shadow: 0 0 10px var(--ring-color);
+}
+.stat-ring .label {
+    font-size: 16px;
+    color: var(--ring-color);
+    margin-top: 4px;
+    letter-spacing: 2px;
+}
+
+/* 设备列表区域 */
+.device-list-area {
+    position: absolute;
+    top: 290px;
+    left: 30px;
+    width: 400px;
+    height: 560px;
+    background: rgba(10, 20, 40, 0.85);
+    border: 2px solid #00aaff;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 170, 255, 0.4), inset 0 0 30px rgba(0, 100, 200, 0.2);
+    overflow: hidden;
+}
+.device-list-header {
+    padding: 12px 16px;
+    background: linear-gradient(180deg, rgba(0, 100, 200, 0.4), rgba(0, 50, 100, 0.2));
+    border-bottom: 1px solid #00aaff;
+}
+.device-list-header span {
+    font-size: 16px;
+    color: #00d4ff;
+    letter-spacing: 3px;
+    text-shadow: 0 0 10px #00d4ff;
+}
+.device-list {
+    height: calc(100% - 45px);
+    overflow-y: auto;
+    padding: 8px;
+}
+.device-list::-webkit-scrollbar { width: 6px; }
+.device-list::-webkit-scrollbar-track { background: rgba(0,50,100,0.3); }
+.device-list::-webkit-scrollbar-thumb { background: #00aaff; border-radius: 3px; }
+.device-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    background: rgba(0, 40, 80, 0.5);
+    border: 1px solid rgba(0, 170, 255, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.device-item:hover {
+    background: rgba(0, 80, 160, 0.6);
+    border-color: #00d4ff;
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+}
+.device-item.selected {
+    background: rgba(0, 120, 200, 0.6);
+    border-color: #00ffff;
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+}
+.device-status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 10px;
+    flex-shrink: 0;
+}
+.device-status-dot.online {
+    background: #00ff88;
+    box-shadow: 0 0 8px #00ff88;
+}
+.device-status-dot.offline {
+    background: #666;
+    box-shadow: 0 0 4px #666;
+}
+.device-info {
+    flex: 1;
+    min-width: 0;
+}
+.device-info .hostname {
+    font-size: 14px;
+    color: white;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.device-info .ip {
+    font-size: 12px;
+    color: #7aa8cc;
+    font-family: 'Consolas', monospace;
+}
+.device-delete {
+    width: 24px;
+    height: 24px;
+    background: rgba(255, 68, 102, 0.2);
+    border: 1px solid #ff4466;
+    border-radius: 4px;
+    color: #ff4466;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+.device-delete:hover {
+    background: #ff4466;
+    color: white;
+    box-shadow: 0 0 10px #ff4466;
+}
+
+/* 设备信息区域 */
+.device-info-area {
+    position: absolute;
+    top: 290px;
+    left: 450px;
+    width: 720px;
+    height: 320px;
+    background: rgba(10, 20, 40, 0.85);
+    border: 2px solid #00aaff;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 170, 255, 0.4), inset 0 0 30px rgba(0, 100, 200, 0.2);
+    padding: 20px;
+}
+.device-info-area .section-title {
+    font-size: 16px;
+    color: #00d4ff;
+    letter-spacing: 3px;
+    margin-bottom: 16px;
+    text-shadow: 0 0 10px #00d4ff;
+}
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 30px;
+}
+.info-item {
+    display: flex;
+    align-items: center;
+}
+.info-item .label {
+    font-size: 13px;
+    color: #7aa8cc;
+    width: 80px;
+    flex-shrink: 0;
+}
+.info-item .value {
+    font-size: 14px;
+    color: white;
+    font-family: 'Consolas', monospace;
+    flex: 1;
+}
+.info-item .value.highlight {
+    color: #00ffff;
+    text-shadow: 0 0 5px #00ffff;
+}
+.progress-section {
+    margin-top: 20px;
+    border-top: 1px solid rgba(0, 170, 255, 0.3);
+    padding-top: 16px;
+}
+.progress-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.progress-item .label {
+    font-size: 12px;
+    color: #7aa8cc;
+    width: 50px;
+}
+.progress-item .bar {
+    flex: 1;
+    height: 14px;
+    background: rgba(0, 40, 80, 0.8);
+    border-radius: 7px;
+    overflow: hidden;
+    border: 1px solid rgba(0, 170, 255, 0.3);
+}
+.progress-item .bar .fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.3s;
+}
+.progress-item.cpu .bar .fill { background: linear-gradient(90deg, #ff4466, #ff8844); }
+.progress-item.memory .bar .fill { background: linear-gradient(90deg, #ffaa00, #ffcc00); }
+.progress-item.disk .bar .fill { background: linear-gradient(90deg, #0066ff, #00aaff); }
+.progress-item .percent {
+    font-size: 12px;
+    color: white;
+    width: 50px;
+    text-align: right;
+    font-family: 'Consolas', monospace;
+}
+.no-selection {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #4a6a8a;
+    font-size: 16px;
+    letter-spacing: 2px;
+}
+
+/* 远程控制区域 */
+.remote-ctrl-area {
+    position: absolute;
+    top: 630px;
+    left: 450px;
+    width: 700px;
+    height: 220px;
+    background: rgba(10, 20, 40, 0.85);
+    border: 2px solid #00aaff;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 170, 255, 0.4), inset 0 0 30px rgba(0, 100, 200, 0.2);
+    padding: 16px;
+}
+.remote-ctrl-area .section-title {
+    font-size: 16px;
+    color: #00d4ff;
+    letter-spacing: 3px;
+    margin-bottom: 16px;
+    text-shadow: 0 0 10px #00d4ff;
+}
+.ctrl-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+.ctrl-btn {
+    padding: 12px 8px;
+    background: linear-gradient(180deg, rgba(0, 80, 160, 0.6), rgba(0, 40, 100, 0.8));
+    border: 2px solid #0088ff;
+    border-radius: 6px;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    letter-spacing: 1px;
+}
+.ctrl-btn:hover {
+    background: linear-gradient(180deg, rgba(0, 120, 200, 0.8), rgba(0, 80, 160, 0.9));
+    border-color: #00ffff;
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.5), 0 0 40px rgba(0, 200, 255, 0.3);
+    transform: translateY(-2px);
+    text-shadow: 0 0 10px #00ffff;
+}
+.ctrl-btn:active {
+    transform: translateY(0);
+}
+.ctrl-btn.danger {
+    border-color: #ff4466;
+}
+.ctrl-btn.danger:hover {
+    border-color: #ff6688;
+    box-shadow: 0 0 20px rgba(255, 68, 102, 0.5);
+}
+.ctrl-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.ctrl-btn:disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* 文件传输区域 */
+.file-transfer-area {
+    position: absolute;
+    top: 630px;
+    left: 1170px;
+    width: 720px;
+    height: 220px;
+    background: rgba(10, 20, 40, 0.85);
+    border: 2px solid #00aaff;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 170, 255, 0.4), inset 0 0 30px rgba(0, 100, 200, 0.2);
+    padding: 16px;
+}
+.file-transfer-area .section-title {
+    font-size: 16px;
+    color: #00d4ff;
+    letter-spacing: 3px;
+    margin-bottom: 16px;
+    text-shadow: 0 0 10px #00d4ff;
+}
+.file-select-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.file-input {
+    flex: 1;
+    padding: 10px 14px;
+    background: rgba(0, 40, 80, 0.8);
+    border: 1px solid rgba(0, 170, 255, 0.5);
+    border-radius: 6px;
+    color: #aaa;
+    font-size: 13px;
+}
+.file-status {
+    font-size: 13px;
+    color: #00ff88;
+    margin-bottom: 16px;
+    font-family: 'Consolas', monospace;
+}
+.file-status.error { color: #ff4466; }
+.send-btn {
+    padding: 14px 40px;
+    background: linear-gradient(180deg, rgba(0, 180, 80, 0.7), rgba(0, 120, 60, 0.9));
+    border: 2px solid #00ff88;
+    border-radius: 6px;
+    color: white;
+    font-size: 15px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 2px;
+}
+.send-btn:hover {
+    background: linear-gradient(180deg, rgba(0, 220, 100, 0.8), rgba(0, 160, 80, 0.9));
+    border-color: #00ffff;
+    box-shadow: 0 0 25px rgba(0, 255, 136, 0.6);
+    transform: translateY(-2px);
+}
+.send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.send-btn:disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* 底部状态栏 */
+.status-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 36px;
+    background: linear-gradient(180deg, rgba(0, 40, 80, 0.9), rgba(0, 20, 50, 0.95));
+    border-top: 1px solid rgba(0, 170, 255, 0.5);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 40px;
+}
+.status-item {
+    font-size: 12px;
+    color: #7aa8cc;
+    font-family: 'Consolas', monospace;
+}
+.status-item .value {
+    color: #00d4ff;
+    margin-left: 6px;
+}
+.status-item .online-count {
+    color: #00ff88;
+    text-shadow: 0 0 5px #00ff88;
+}
+.status-item .server-status {
+    color: #00ff88;
+    margin-left: 6px;
+    letter-spacing: 1px;
+}
+</style>
+</head>
+<body>
+<div class="bg-container"></div>
+<div class="main-content">
+    <!-- 标题区 -->
+    <div class="title-area">
+        <h1>坤展成终端管理系统v1.4.0-服务器端</h1>
+        <div class="subtitle">北京万乘兄弟科技有限公司 联系电话:18210234280</div>
+    </div>
+
+    <!-- 三个圆形数据模块 -->
+    <div class="stats-row">
+        <div class="stat-ring online">
+            <div class="value" id="onlineCount">0</div>
+            <div class="label">在线设备</div>
+        </div>
+        <div class="stat-ring offline">
+            <div class="value" id="offlineCount">0</div>
+            <div class="label">离线设备</div>
+        </div>
+        <div class="stat-ring total">
+            <div class="value" id="totalCount">0</div>
+            <div class="label">设备总数</div>
+        </div>
+    </div>
+
+    <!-- 设备列表区域 -->
+    <div class="device-list-area">
+        <div class="device-list-header">
+            <span>设备列表</span>
+        </div>
+        <div class="device-list" id="deviceList">
+            <!-- 动态生成 -->
+        </div>
+    </div>
+
+    <!-- 设备信息区域 -->
+    <div class="device-info-area">
+        <div class="section-title">设备信息</div>
+        <div id="deviceInfoContent">
+            <div class="no-selection">请从左侧选择设备查看详情</div>
+        </div>
+    </div>
+
+    <!-- 远程控制区域 -->
+    <div class="remote-ctrl-area">
+        <div class="section-title">远程控制</div>
+        <div class="ctrl-grid">
+            <button class="ctrl-btn" id="btnDesktop" onclick="sendCmd('start_remote_desktop')" disabled>远程桌面</button>
+            <button class="ctrl-btn danger" id="btnShutdown" onclick="sendCmd('shutdown')" disabled>关机</button>
+            <button class="ctrl-btn danger" id="btnRestart" onclick="sendCmd('restart')" disabled>重启</button>
+            <button class="ctrl-btn" id="btnMute" onclick="sendCmd('mute')" disabled>静音</button>
+            <button class="ctrl-btn" id="btnUnmute" onclick="sendCmd('unmute')" disabled>取消静音</button>
+            <button class="ctrl-btn" id="btnVolUp" onclick="sendCmd('volume:up')" disabled>音量+</button>
+            <button class="ctrl-btn" id="btnVolDown" onclick="sendCmd('volume:down')" disabled>音量-</button>
+            <button class="ctrl-btn" id="btnStatus" onclick="sendCmd('status')" disabled>查询状态</button>
+        </div>
+    </div>
+
+    <!-- 文件传输区域 -->
+    <div class="file-transfer-area">
+        <div class="section-title">文件传输</div>
+        <div class="file-select-row">
+            <input type="file" id="fileInput" class="file-input" style="display:none" onchange="onFileSelected(this)">
+            <input type="text" id="filePath" class="file-input" readonly placeholder="未选择文件" style="cursor:pointer" onclick="document.getElementById('fileInput').click()">
+        </div>
+        <div class="file-status" id="fileStatus">就绪</div>
+        <button class="send-btn" id="sendBtn" onclick="sendFile()" disabled>发送文件</button>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="status-bar">
+        <div class="status-item">
+            服务器:<span class="value" id="serverAddr">-:8080</span>
+        </div>
+        <div class="status-item">
+            在线设备:<span class="value online-count" id="onlineCountBar">0/0</span>
+        </div>
+        <div class="status-item">
+            <span class="server-status">服务运行中</span>
+        </div>
+    </div>
+</div>
+
+<script>
+let devices = [];
+let selectedId = null;
+let selectedFile = null;
+
+function getServerIP() {
+    // 从当前页面URL提取服务器IP
+    const match = window.location.href.match(/\\/\\/([^\\/]+)/);
+    return match ? match[1] : 'localhost';
+}
+
+function refresh() {
+    fetch('/api/devices').then(r => r.json()).then(data => {
+        devices = data.devices || [];
+        renderDevices();
+        updateStats();
+    });
+}
+
+function renderDevices() {
+    const container = document.getElementById('deviceList');
+    let html = '';
+    devices.forEach(d => {
+        const isOnline = d.status === 'online';
+        const isSelected = d.id === selectedId;
+        html += '<div class="device-item' + (isSelected ? ' selected' : '') + '" onclick="selectDevice(\\'' + d.id + '\\')">';
+        html += '<div class="device-status-dot ' + (isOnline ? 'online' : 'offline') + '"></div>';
+        html += '<div class="device-info">';
+        html += '<div class="hostname">' + escapeHtml(d.hostname || '未知') + '</div>';
+        html += '<div class="ip">' + escapeHtml(d.ip || '-') + '</div>';
+        html += '</div>';
+        html += '<div class="device-delete" onclick="event.stopPropagation(); deleteDevice(\\'' + d.id + '\\')">✕</div>';
+        html += '</div>';
+    });
+    if (devices.length === 0) {
+        html = '<div style="padding:20px;text-align:center;color:#4a6a8a;">暂无设备连接</div>';
+    }
+    container.innerHTML = html;
+}
+
+function updateStats() {
+    const online = devices.filter(d => d.status === 'online').length;
+    const offline = devices.length - online;
+    document.getElementById('onlineCount').textContent = online;
+    document.getElementById('offlineCount').textContent = offline;
+    document.getElementById('totalCount').textContent = devices.length;
+    document.getElementById('onlineCountBar').textContent = online + '/' + devices.length;
+    
+    // 更新圆形环形的进度效果
+    document.querySelector('.stat-ring.online').style.setProperty('--percent', (online / Math.max(devices.length, 1)) * 100 + '%');
+    document.querySelector('.stat-ring.offline').style.setProperty('--percent', (offline / Math.max(devices.length, 1)) * 100 + '%');
+    document.querySelector('.stat-ring.total').style.setProperty('--percent', '100%');
+}
+
+function selectDevice(id) {
+    selectedId = id;
+    renderDevices();
+    renderDeviceInfo();
+    updateCtrlBtns(true);
+}
+
+function renderDeviceInfo() {
+    const container = document.getElementById('deviceInfoContent');
+    if (!selectedId) {
+        container.innerHTML = '<div class="no-selection">请从左侧选择设备查看详情</div>';
+        return;
+    }
+    const d = devices.find(x => x.id === selectedId);
+    if (!d) {
+        container.innerHTML = '<div class="no-selection">设备不存在</div>';
+        return;
+    }
+    const cpu = parseFloat(d.cpu_percent) || 0;
+    const mem = parseFloat(d.memory_percent) || 0;
+    const disk = parseFloat(d.disk_percent) || 0;
+    
+    container.innerHTML = '<div class="info-grid">' +
+        '<div class="info-item"><span class="label">主机名:</span><span class="value highlight">' + escapeHtml(d.hostname || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">IP地址:</span><span class="value highlight">' + escapeHtml(d.ip || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">MAC地址:</span><span class="value">' + escapeHtml(d.mac || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">操作系统:</span><span class="value">' + escapeHtml(d.os || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">系统版本:</span><span class="value">' + escapeHtml(d.os_version || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">架构:</span><span class="value">' + escapeHtml(d.arch || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">最后在线:</span><span class="value">' + escapeHtml(d.last_seen || '-') + '</span></div>' +
+        '<div class="info-item"><span class="label">状态:</span><span class="value" style="color:' + (d.status === 'online' ? '#00ff88' : '#ff4466') + '">' + (d.status === 'online' ? '在线' : '离线') + '</span></div>' +
+        '</div>' +
+        '<div class="progress-section">' +
+        '<div class="progress-item cpu"><span class="label">CPU</span><div class="bar"><div class="fill" style="width:' + cpu + '%"></div></div><span class="percent">' + cpu.toFixed(1) + '%</span></div>' +
+        '<div class="progress-item memory"><span class="label">内存</span><div class="bar"><div class="fill" style="width:' + mem + '%"></div></div><span class="percent">' + mem.toFixed(1) + '%</span></div>' +
+        '<div class="progress-item disk"><span class="label">磁盘</span><div class="bar"><div class="fill" style="width:' + disk + '%"></div></div><span class="percent">' + disk.toFixed(1) + '%</span></div>' +
+        '</div>';
+}
+
+function updateCtrlBtns(enabled) {
+    const btns = ['btnDesktop', 'btnShutdown', 'btnRestart', 'btnMute', 'btnUnmute', 'btnVolUp', 'btnVolDown', 'btnStatus'];
+    btns.forEach(id => {
+        document.getElementById(id).disabled = !enabled;
+    });
+    document.getElementById('sendBtn').disabled = !enabled;
+}
+
+function sendCmd(cmd) {
+    if (!selectedId) return;
+    fetch('/api/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target_ids: [selectedId], cmd: cmd})
+    }).then(r => r.json()).then(data => {
+        console.log('指令已发送:', cmd, data);
+    }).catch(err => {
+        console.error('发送失败:', err);
+    });
+}
+
+function deleteDevice(id) {
+    if (!confirm('确定删除该设备？')) return;
+    fetch('/api/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target_ids: [id], cmd: 'delete_device'})
+    }).then(() => {
+        if (selectedId === id) {
+            selectedId = null;
+            renderDeviceInfo();
+            updateCtrlBtns(false);
+        }
+        refresh();
+    });
+}
+
+function onFileSelected(input) {
+    const file = input.files[0];
+    if (file) {
+        selectedFile = file;
+        document.getElementById('filePath').value = file.name;
+        document.getElementById('fileStatus').textContent = '已选择: ' + file.name + ' (' + formatSize(file.size) + ')';
+        document.getElementById('fileStatus').className = 'file-status';
+    }
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+function sendFile() {
+    if (!selectedId || !selectedFile) return;
+    const status = document.getElementById('fileStatus');
+    status.textContent = '正在上传...';
+    status.className = 'file-status';
+    
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    
+    fetch('/api/file/upload', {
+        method: 'POST',
+        body: formData
+    }).then(r => r.json()).then(data => {
+        if (data.server_file_name) {
+            status.textContent = '文件已上传，发送中...';
+            return fetch('/api/command', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    target_ids: [selectedId],
+                    cmd: 'file_transfer',
+                    extra: {
+                        file_name: selectedFile.name,
+                        file_size: selectedFile.size,
+                        server_file_name: data.server_file_name,
+                        download_url: window.location.protocol + '//' + getServerIP() + ':8080/api/file/' + data.server_file_name
+                    }
+                })
+            });
+        }
+    }).then(() => {
+        status.textContent = '发送成功！';
+        status.className = 'file-status';
+        setTimeout(() => {
+            status.textContent = '就绪';
+        }, 3000);
+    }).catch(err => {
+        status.textContent = '发送失败: ' + err;
+        status.className = 'file-status error';
+    });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 初始化
+document.getElementById('serverAddr').textContent = getServerIP() + ':8080';
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>'''
+
+
+@app.get('/cyber')
+async def cyber_index():
+    """赛博朋克风格管理界面"""
+    return HTMLResponse(CYBER_HTML)
 
 
 # ===== 远程桌面查看器 =====

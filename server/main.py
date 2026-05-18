@@ -1210,73 +1210,66 @@ class ServerGUI:
                 font=('Microsoft YaHei', 12, 'bold'), anchor='w')
         self.detail_title.pack(fill='x', padx=10, pady=(10, 5))
         
-        # 基本信息区域
-        info_frame = tk.LabelFrame(right_frame, text=' 基本信息 ', font=('Microsoft YaHei', 10, 'bold'))
+        # 设备信息区域（基本信息+系统状态 合并）
+        info_frame = tk.LabelFrame(right_frame, text=' 设备信息 ', font=('Microsoft YaHei', 10, 'bold'))
         info_frame.pack(fill='x', padx=10, pady=5)
         
         self.info_labels = {}
         info_grid = tk.Frame(info_frame)
-        info_grid.pack(padx=10, pady=8)
-        fields = [('主机名', 'hostname'), ('IP地址', 'ip'), ('MAC地址', 'mac'),
-                  ('操作系统', 'os'), ('系统版本', 'os_version'), ('架构', 'arch')]
-        for i, (label, key) in enumerate(fields):
-            row, col = i // 2, (i % 2) * 2
-            tk.Label(info_grid, text=f'{label}：', font=('Microsoft YaHei', 9), anchor='e', width=10).grid(row=row, column=col, sticky='e', pady=2)
+        info_grid.pack(padx=10, pady=6)
+        
+        # 基本信息左列
+        fields_left = [('主机名', 'hostname'), ('IP地址', 'ip'), ('MAC地址', 'mac')]
+        for i, (label, key) in enumerate(fields_left):
+            tk.Label(info_grid, text=f'{label}：', font=('Microsoft YaHei', 9), anchor='e', width=8).grid(row=i, column=0, sticky='e', pady=1)
             if key == 'mac':
-                self.info_labels[key] = tk.Entry(info_grid, font=('Microsoft YaHei', 9), width=25, relief='sunken', bg='white')
-                self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
+                self.info_labels[key] = tk.Entry(info_grid, font=('Microsoft YaHei', 9), width=22, relief='sunken', bg='white')
+                self.info_labels[key].grid(row=i, column=1, sticky='w', pady=1, padx=(3, 10))
                 self.info_labels[key].config(state='readonly')
             else:
-                self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=25, relief='sunken', bg='white')
-                self.info_labels[key].grid(row=row, column=col+1, sticky='w', pady=2, padx=(5, 15))
+                self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=22, relief='sunken', bg='white')
+                self.info_labels[key].grid(row=i, column=1, sticky='w', pady=1, padx=(3, 10))
         
-        # 系统状态区域
-        status_frame = tk.LabelFrame(right_frame, text=' 系统状态 ', font=('Microsoft YaHei', 10, 'bold'))
-        status_frame.pack(fill='x', padx=10, pady=5)
+        # 系统版本右列
+        fields_right = [('操作系统', 'os'), ('系统版本', 'os_version'), ('架构', 'arch')]
+        for i, (label, key) in enumerate(fields_right):
+            tk.Label(info_grid, text=f'{label}：', font=('Microsoft YaHei', 9), anchor='e', width=8).grid(row=i, column=2, sticky='e', pady=1)
+            self.info_labels[key] = tk.Label(info_grid, text='-', font=('Microsoft YaHei', 9), anchor='w', width=22, relief='sunken', bg='white')
+            self.info_labels[key].grid(row=i, column=3, sticky='w', pady=1, padx=(3, 0))
         
-        status_grid = tk.Frame(status_frame)
-        status_grid.pack(padx=10, pady=8)
+        # 系统状态（紧跟基本信息下方）
+        stat_grid = tk.Frame(info_frame)
+        stat_grid.pack(padx=10, pady=(0, 6))
         
-        # CPU
-        tk.Label(status_grid, text='CPU使用率：', font=('Microsoft YaHei', 9)).grid(row=0, column=0, sticky='e', pady=3)
-        self.cpu_var = tk.StringVar(value='0%')
-        tk.Label(status_grid, textvariable=self.cpu_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=0, column=1, sticky='w', padx=5)
-        self.cpu_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
-        self.cpu_progress.grid(row=0, column=2, padx=5)
+        for i, (label, var_name, color) in enumerate([
+            ('CPU', 'cpu_var', '#e74c3c'), ('内存', 'mem_var', '#f39c12'), ('磁盘', 'disk_var', '#3498db')
+        ]):
+            tk.Label(stat_grid, text=f'{label}：', font=('Microsoft YaHei', 9), width=5, anchor='e').grid(row=0, column=i*3, sticky='e', padx=(0,2))
+            var = tk.StringVar(value='0%')
+            setattr(self, var_name, var)
+            lbl = tk.Label(stat_grid, textvariable=var, font=('Microsoft YaHei', 9, 'bold'), width=6, relief='sunken', bg='white')
+            lbl.grid(row=0, column=i*3+1, sticky='w', padx=2)
+            prog = ttk.Progressbar(stat_grid, length=80, mode='determinate', maximum=100)
+            prog.grid(row=0, column=i*3+2, padx=2)
+            setattr(self, f'{var_name.replace("_var","")}_progress', prog)
         
-        # 内存
-        tk.Label(status_grid, text='内存使用率：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='e', pady=3)
-        self.mem_var = tk.StringVar(value='0%')
-        tk.Label(status_grid, textvariable=self.mem_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=1, column=1, sticky='w', padx=5)
-        self.mem_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
-        self.mem_progress.grid(row=1, column=2, padx=5)
+        # 操作按钮区域（远程控制 + 文件传输 左右并排）
+        action_row = tk.Frame(right_frame)
+        action_row.pack(fill='x', padx=10, pady=5)
         
-        # 磁盘
-        tk.Label(status_grid, text='磁盘使用率：', font=('Microsoft YaHei', 9)).grid(row=2, column=0, sticky='e', pady=3)
-        self.disk_var = tk.StringVar(value='0%')
-        tk.Label(status_grid, textvariable=self.disk_var, font=('Microsoft YaHei', 9), width=8, relief='sunken', bg='white').grid(row=2, column=1, sticky='w', padx=5)
-        self.disk_progress = ttk.Progressbar(status_grid, length=150, mode='determinate', maximum=100)
-        self.disk_progress.grid(row=2, column=2, padx=5)
+        # 左侧：远程控制
+        ctrl_frame = tk.LabelFrame(action_row, text=' 远程控制 ', font=('Microsoft YaHei', 10, 'bold'))
+        ctrl_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
         
-        # 操作按钮区域
-        action_frame = tk.LabelFrame(right_frame, text=' 操作 ', font=('Microsoft YaHei', 10, 'bold'))
-        action_frame.pack(fill='x', padx=10, pady=5)
+        ctrl_grid = tk.Frame(ctrl_frame)
+        ctrl_grid.pack(padx=8, pady=6)
         
-        btn_grid = tk.Frame(action_frame)
-        btn_grid.pack(padx=8, pady=6)
+        # 远程桌面大按钮
+        tk.Button(ctrl_grid, text='远程桌面', width=10, bg='#8e44ad', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._cmd_remote_desktop
+                 ).grid(row=0, column=0, columnspan=3, pady=3)
         
-        # 第一行：远程桌面(大按钮) + 文件传输
-        tk.Button(btn_grid, text='🖥 远程桌面', width=12, bg='#8e44ad', fg='white', 
-                 font=('Microsoft YaHei', 10, 'bold'), command=self._cmd_remote_desktop
-                 ).grid(row=0, column=0, padx=4, pady=3, rowspan=2)
-        
-        tk.Button(btn_grid, text='选择文件', width=10, command=self._select_file
-                 ).grid(row=0, column=1, padx=4, pady=3)
-        tk.Button(btn_grid, text='发送文件', width=10, bg='#27ae60', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._send_file
-                 ).grid(row=1, column=1, padx=4, pady=3)
-        
-        # 第二行：系统控制按钮
+        # 系统控制按钮
         ctrl_buttons = [
             ('关机', '#e74c3c', self._cmd_shutdown),
             ('重启', '#f39c12', self._cmd_restart),
@@ -1286,18 +1279,39 @@ class ServerGUI:
             ('音量-', '#3498db', self._cmd_volume_down),
         ]
         for i, (text, color, cmd) in enumerate(ctrl_buttons):
-            tk.Button(btn_grid, text=text, width=8, bg=color, fg='white',
+            row, col = 1 + i // 3, i % 3
+            tk.Button(ctrl_grid, text=text, width=8, bg=color, fg='white',
                      font=('Microsoft YaHei', 9, 'bold'), command=cmd
-                     ).grid(row=2 + i // 3, column=i % 3, padx=3, pady=2)
+                     ).grid(row=row, column=col, padx=3, pady=2)
+        
+        # 右侧：文件传输
+        file_frame = tk.LabelFrame(action_row, text=' 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
+        file_frame.pack(side='right', fill='both', expand=True, padx=(5, 0))
+        
+        file_grid = tk.Frame(file_frame)
+        file_grid.pack(padx=8, pady=6)
+        
+        tk.Button(file_grid, text='选择文件', width=10, command=self._select_file
+                 ).grid(row=0, column=0, padx=4, pady=3)
+        tk.Button(file_grid, text='发送文件', width=10, bg='#27ae60', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._send_file
+                 ).grid(row=0, column=1, padx=4, pady=3)
+        
+        self.file_path_var = tk.StringVar(value='未选择文件')
+        tk.Label(file_grid, textvariable=self.file_path_var, font=('Microsoft YaHei', 8),
+                anchor='w', relief='sunken', bg='white', width=24
+                ).grid(row=1, column=0, columnspan=2, sticky='ew', padx=4, pady=2)
+        
+        self.transfer_status_var = tk.StringVar(value='就绪')
+        tk.Label(file_grid, textvariable=self.transfer_status_var, font=('Microsoft YaHei', 9),
+                anchor='w', fg='#27ae60'
+                ).grid(row=2, column=0, columnspan=2, sticky='w', padx=4, pady=(0, 2))
         
         # 状态提示
         self.cmd_status_var = tk.StringVar(value='就绪')
-        self.cmd_status_label = tk.Label(action_frame, textvariable=self.cmd_status_var, 
+        self.cmd_status_label = tk.Label(right_frame, textvariable=self.cmd_status_var,
                  font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
-        self.cmd_status_label.pack(fill='x', padx=10, pady=(0, 5))
-        
-        self.file_path_var = tk.StringVar(value='未选择文件')
-        self.transfer_status_var = tk.StringVar(value='就绪')
+        self.cmd_status_label.pack(fill='x', padx=10)
         self.selected_file = None
         
         # 底部状态栏

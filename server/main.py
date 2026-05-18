@@ -1374,6 +1374,26 @@ class ServerGUI:
                 anchor='w', fg='#27ae60'
                 ).grid(row=2, column=0, columnspan=2, sticky='w', padx=4, pady=(0, 2))
         
+        # 拖拽文件提示区
+        drop_label = tk.Label(file_frame, text='📂 拖拽文件到此处发送', font=('Microsoft YaHei', 10),
+                             fg='#7f8c8d', bg='#f5f5f5', relief='groove', height=3)
+        drop_label.pack(fill='x', padx=8, pady=(0, 8))
+        
+        # 注册拖拽事件（windnd）
+        try:
+            import windnd
+            def on_drop(files):
+                if files:
+                    path = files[0].decode('gbk') if isinstance(files[0], bytes) else files[0]
+                    self.selected_file = path
+                    self.file_path_var.set(os.path.basename(path))
+                    self.transfer_status_var.set('已选择，点击发送或拖入即发')
+                    # 拖入后自动发送
+                    self._send_file()
+            windnd.hook_dropfiles(file_frame, func=on_drop)
+        except:
+            pass
+        
         # 状态提示
         self.cmd_status_var = tk.StringVar(value='就绪')
         self.cmd_status_label = tk.Label(right_frame, textvariable=self.cmd_status_var,
@@ -1455,8 +1475,11 @@ class ServerGUI:
             tk.Label(status_frame, text=status_text, font=('Microsoft YaHei', 8),
                     bg=card_bg, fg=status_fg).pack(side='left', padx=(2, 0))
             
-            # 文字标签 - 只显示主机名+IP
-            content = f'{hostname}\nIP: {ip}'
+            # 文字标签 - 显示别名+主机名+IP
+            if alias:
+                content = f'[{alias}] {hostname}\nIP: {ip}'
+            else:
+                content = f'{hostname}\nIP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
@@ -1475,12 +1498,6 @@ class ServerGUI:
             edit_btn = tk.Label(btn_frame, text='✏️', font=('Microsoft YaHei', 10), 
                                bg=card_bg, cursor='hand2')
             edit_btn.pack(side='right')
-            
-            # 设备名称（编辑按钮左侧显示）
-            if alias:
-                alias_label = tk.Label(btn_frame, text=alias, font=('Microsoft YaHei', 9, 'bold'), 
-                                      bg=card_bg, fg='#2c3e50', anchor='e')
-                alias_label.pack(side='right', padx=(8, 4))
             
             def on_edit(event, cid=cid):
                 self._edit_device_alias(cid)

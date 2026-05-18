@@ -1011,7 +1011,7 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 85
+_screen_quality = 95
 
 class ScreenHandler(BaseHTTPRequestHandler):
     """截屏HTTP请求处理器"""

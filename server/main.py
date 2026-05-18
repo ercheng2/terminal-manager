@@ -699,9 +699,9 @@ class RemoteDesktopViewer:
         
         # 质量选择
         tk.Label(toolbar, text='画质:', fg='white', bg='#2c3e50', font=('Microsoft YaHei', 9)).pack(side='left', padx=(15, 2))
-        self.quality_var = tk.IntVar(value=85)
+        self.quality_var = tk.IntVar(value=95)
         self.quality_var.trace_add('write', lambda *args: self._notify_quality())
-        quality_scale = tk.Scale(toolbar, from_=20, to=90, orient='horizontal', 
+        quality_scale = tk.Scale(toolbar, from_=20, to=95, orient='horizontal', 
                                 variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
                                 highlightthickness=0, troughcolor='#34495e')
         quality_scale.pack(side='left')
@@ -911,7 +911,7 @@ class RemoteDesktopViewer:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.NEAREST)
+                img = img.resize((new_w, new_h), Image.LANCZOS)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             

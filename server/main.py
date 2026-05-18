@@ -745,15 +745,20 @@ class RemoteDesktopViewer:
         self.fps_timer = time.time()
         self._last_move_time = 0  # 鼠标移动节流
         self._canvas_size = (1024, 700)  # 缓存canvas尺寸
-        self._latest_img = None  # 后台解码完的PIL Image（只保留最新一帧）
+        self._latest_img = None  # 解码完的PIL Image
+        self._raw_frame = None  # 收到的JPEG原始数据（收帧线程写入，解码线程读取）
         
-        # 启动主线程轮询显示
+        # 启动主线程轮询显示（1ms间隔）
         self._poll_display()
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
         self._input_thread = threading.Thread(target=self._input_sender, daemon=True)
         self._input_thread.start()
+        
+        # 启动解码线程（独立于收帧线程，避免收帧被解码阻塞）
+        self._decode_thread = threading.Thread(target=self._decode_worker, daemon=True)
+        self._decode_thread.start()
         
         # 启动截屏拉取线程
         self._fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
@@ -853,10 +858,8 @@ class RemoteDesktopViewer:
                         self.frame_count = 0
                         self.fps_timer = now
                     
-                    # 后台解码+缩放（重活在后台做）
-                    img = self._decode_and_scale(frame_data)
-                    if img:
-                        self._latest_img = img
+                    # 收到帧数据，存入解码队列（不阻塞收帧）
+                    self._raw_frame = frame_data
                 
             except Exception as e:
                 if not self.running:
@@ -889,16 +892,26 @@ class RemoteDesktopViewer:
                     self.frame_count = 0
                     self.fps_timer = now
                 
-                # 后台解码+缩放
-                img = self._decode_and_scale(jpeg_data)
-                if img:
-                    self._latest_img = img
+                # 收到帧数据，存入解码队列
+                self._raw_frame = jpeg_data
                 
             except Exception as e:
                 if not self.running:
                     break
                 self.win.after(0, lambda: self.status_var.set('HTTP重连中...'))
                 time.sleep(1)
+    
+    def _decode_worker(self):
+        """独立解码线程：收帧和解码并行，互不阻塞"""
+        while self.running:
+            raw = self._raw_frame
+            if raw:
+                self._raw_frame = None
+                img = self._decode_and_scale(raw)
+                if img:
+                    self._latest_img = img
+            else:
+                time.sleep(0.001)  # 没数据就歇1ms
     
     def _decode_and_scale(self, jpeg_data):
         """后台线程：JPEG解码+缩放（不在主线程做，避免卡顿）"""
@@ -911,7 +924,7 @@ class RemoteDesktopViewer:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                img = img.resize((new_w, new_h), Image.LANCZOS)
+                img = img.resize((new_w, new_h), Image.BILINEAR)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             
@@ -939,7 +952,7 @@ class RemoteDesktopViewer:
             except Exception as e:
                 print(f'[远程桌面] 显示失败: {e}')
         
-        self.win.after(16, self._poll_display)
+        self.win.after(1, self._poll_display)
     
     def _show_frame(self, img):
         """直接显示一帧（备用）"""

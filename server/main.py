@@ -878,17 +878,8 @@ class RemoteDesktopViewer:
                 url = f'http://{self.client_ip}:5901/screen?quality={quality}'
                 req = urllib.request.Request(url)
                 
-                try:
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        if resp.status == 304:
-                            time.sleep(0.03)
-                            continue
-                        jpeg_data = resp.read()
-                except urllib.error.HTTPError as e:
-                    if e.code == 304:
-                        time.sleep(0.03)
-                        continue
-                    raise
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    jpeg_data = resp.read()
                 
                 self.frame_count += 1
                 now = time.time()

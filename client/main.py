@@ -1011,7 +1011,7 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 50
+_screen_quality = 85
 
 class ScreenHandler(BaseHTTPRequestHandler):
     """截屏HTTP请求处理器"""
@@ -1063,19 +1063,6 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 buf = io.BytesIO()
                 img.save(buf, format='JPEG', quality=quality)
                 jpeg_data = buf.getvalue()
-                
-                # 计算hash用于增量判断
-                current_hash = hashlib.md5(jpeg_data).hexdigest()[:12]
-                
-                # 如果hash相同，返回304
-                if check_hash and check_hash == current_hash:
-                    self.send_response(304)
-                    self.send_header('X-Hash', current_hash)
-                    self.end_headers()
-                    return
-                
-                _last_screen_hash = current_hash
-                _last_screen_jpeg = jpeg_data
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'image/jpeg')
@@ -1168,13 +1155,6 @@ def _stream_frames(conn):
         while True:
             screenshot = sct.grab(monitor)
             raw = screenshot.bgra
-            
-            # 快速增量检测
-            frame_hash = zlib.crc32(raw[:10240])
-            if prev_hash is not None and frame_hash == prev_hash:
-                conn.sendall(struct.pack('!I', 0))
-                continue
-            prev_hash = frame_hash
             
             # BGRA→RGB转换
             img = Image.frombytes('RGB', screenshot.size, raw, 'raw', 'BGRX')

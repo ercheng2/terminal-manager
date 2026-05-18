@@ -1232,6 +1232,7 @@ class ServerGUI:
         self.root.title('坤展成终端管理系统 v1.3-53 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
+        self.root.after(100, lambda: self.root.state('zoomed'))  # 默认最大化
         
         self.selected_client_id = None
         self._refresh_after_id = None
@@ -1357,12 +1358,12 @@ class ServerGUI:
         rdp_btn_frame = tk.Frame(rdp_frame)
         rdp_btn_frame.pack(fill='x')
         
-        # 显示模式选择
-        self.rdp_mode_var = tk.StringVar(value='最大化窗口')
-        mode_menu = tk.OptionMenu(rdp_btn_frame, self.rdp_mode_var, '全屏', '最大化窗口')
-        mode_menu.config(font=('Microsoft YaHei', 9), width=10, bg='#f0f0f0', highlightthickness=0)
-        mode_menu.pack(side='right', padx=(5, 0))
-        tk.Label(rdp_btn_frame, text='显示:', font=('Microsoft YaHei', 9), fg='#7f8c8d').pack(side='right')
+        # 全屏勾选框
+        self.rdp_fullscreen_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(rdp_btn_frame, text='全屏', variable=self.rdp_fullscreen_var,
+                       font=('Microsoft YaHei', 9), fg='#2c3e50', selectcolor='#f0f0f0',
+                       activebackground='#f5f5f5', activeforeground='#2c3e50'
+                       ).pack(side='right', padx=(5, 0))
         
         tk.Button(rdp_btn_frame, text='🖥️  远程桌面', bg='#8e44ad', fg='white',
                  font=('Microsoft YaHei', 13, 'bold'), command=self._cmd_remote_desktop,
@@ -1831,7 +1832,7 @@ class ServerGUI:
             time.sleep(1)
             
             # 打开查看器（传入显示模式）
-            display_mode = self.rdp_mode_var.get()
+            display_mode = '全屏' if self.rdp_fullscreen_var.get() else '最大化窗口'
             RemoteDesktopViewer(self.root, client_ip, self.selected_client_id, local_ip, display_mode=display_mode)
             self.cmd_status_var.set('✅ 远程桌面已启动')
             self.cmd_status_label.config(fg='#27ae60')

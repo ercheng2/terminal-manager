@@ -748,6 +748,7 @@ class RemoteDesktopViewer:
         self._last_move_time = 0  # 鼠标移动节流
         self._canvas_size = (1024, 700)  # 缓存canvas尺寸
         self._latest_img = None  # 解码完的PIL Image
+        self._latest_photo = None  # 后台线程创建的PhotoImage，(photo, offset_x, offset_y)
         self._raw_frame = None  # 收到的JPEG原始数据（收帧线程写入，解码线程读取）
         self._frame_event = threading.Event()  # 帧到达事件，替代sleep轮询
         
@@ -922,7 +923,12 @@ class RemoteDesktopViewer:
                     self._raw_frame = None
                 img = self._decode_and_scale(raw)
                 if img:
-                    self._latest_img = img
+                    # 把PhotoImage创建也放后台，减少主线程负担
+                    try:
+                        photo = ImageTk.PhotoImage(img)
+                        self._latest_photo = (photo, self.offset_x, self.offset_y)
+                    except:
+                        self._latest_img = img
     
     def _decode_and_scale(self, jpeg_data):
         """后台线程：JPEG解码+缩放"""
@@ -937,7 +943,7 @@ class RemoteDesktopViewer:
                 new_h = int(ih * self.screen_scale)
                 # 尺寸差距<5%时跳过resize，省掉缩放耗时
                 if abs(new_w - iw) > iw * 0.05 or abs(new_h - ih) > ih * 0.05:
-                    img = img.resize((new_w, new_h), Image.NEAREST)
+                    img = img.resize((new_w, new_h), Image.BILINEAR)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             
@@ -946,24 +952,29 @@ class RemoteDesktopViewer:
             return None
     
     def _poll_display(self):
-        """主线程轮询：每16ms检查有没有新帧，有就显示"""
+        """主线程轮询：1ms检查新帧，有就显示"""
         if not self.running:
             return
         
-        img = self._latest_img
-        if img:
+        # 优先用后台线程创建好的PhotoImage（省掉主线程转换时间）
+        if self._latest_photo:
+            photo, ox, oy = self._latest_photo
+            self._latest_photo = None
+            self.current_photo = photo
+            try:
+                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+                self.canvas.coords(self._canvas_img_id, ox, oy)
+            except Exception as e:
+                pass
+        elif self._latest_img:
+            img = self._latest_img
             self._latest_img = None
             try:
-                cw = self.canvas.winfo_width()
-                ch = self.canvas.winfo_height()
-                if cw > 100 and ch > 100:
-                    self._canvas_size = (cw, ch)
-                
                 self.current_photo = ImageTk.PhotoImage(img)
                 self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
                 self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
             except Exception as e:
-                print(f'[远程桌面] 显示失败: {e}')
+                pass
         
         self.win.after(1, self._poll_display)
     

@@ -1061,7 +1061,7 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 
                 # 压缩为JPEG
                 buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=quality)
+                img.save(buf, format='JPEG', quality=quality, subsampling=0)
                 jpeg_data = buf.getvalue()
                 
                 self.send_response(200)
@@ -1178,10 +1178,10 @@ def _stream_frames(conn):
             else:
                 img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
             
-            # JPEG编码（quality=85+subsampling=0，清晰度接近95但体积小40%）
+            # JPEG编码（使用_screen_quality变量，默认95最高画质）
             jpeg_buf.seek(0)
             jpeg_buf.truncate()
-            img.save(jpeg_buf, format='JPEG', quality=85, subsampling=0, optimize=False)
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
             jpeg_data = jpeg_buf.getvalue()
             
             # 发送

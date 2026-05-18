@@ -673,7 +673,7 @@ setInterval(refresh, 10000);
 class RemoteDesktopViewer:
     """远程桌面查看器"""
     
-    def __init__(self, parent, client_ip, client_id, server_ip):
+    def __init__(self, parent, client_ip, client_id, server_ip, display_mode='最大化窗口'):
         self.client_ip = client_ip
         self.client_id = client_id
         self.server_ip = server_ip
@@ -684,12 +684,22 @@ class RemoteDesktopViewer:
         self.offset_x = 0
         self.offset_y = 0
         self.current_img = None
+        self.display_mode = display_mode
+        self._is_fullscreen = False
         
         # 创建查看器窗口
         self.win = tk.Toplevel(parent)
         self.win.title(f'远程桌面 - {client_ip}')
         self.win.geometry('1024x700')
         self.win.protocol('WM_DELETE_WINDOW', self._on_close)
+        
+        # 根据显示模式设置窗口
+        if display_mode == '全屏':
+            self.win.attributes('-fullscreen', True)
+            self._is_fullscreen = True
+        else:
+            # 最大化窗口 - 有标题栏和关闭按钮
+            self.win.state('zoomed')
         
         # 工具栏
         toolbar = tk.Frame(self.win, bg='#2c3e50')
@@ -705,6 +715,11 @@ class RemoteDesktopViewer:
                                 variable=self.quality_var, length=100, bg='#2c3e50', fg='white',
                                 highlightthickness=0, troughcolor='#34495e')
         quality_scale.pack(side='left')
+        
+        # 全屏切换按钮
+        self._fullscreen_btn = tk.Button(toolbar, text='🔲全屏', bg='#3498db', fg='white', 
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._toggle_fullscreen)
+        self._fullscreen_btn.pack(side='right', padx=5, pady=3)
         
         # 断开按钮
         tk.Button(toolbar, text='断开', bg='#e74c3c', fg='white', font=('Microsoft YaHei', 9, 'bold'),
@@ -736,6 +751,8 @@ class RemoteDesktopViewer:
         self.canvas.bind('<MouseWheel>', self._on_scroll)
         self.canvas.bind('<Key>', self._on_key_press)
         self.canvas.focus_set()
+        # ESC退出全屏
+        self.win.bind('<Escape>', lambda e: self._toggle_fullscreen() if self._is_fullscreen else None)
         # 窗口大小变化时更新canvas缓存尺寸
         self.canvas.bind('<Configure>', self._on_canvas_resize)
         
@@ -1190,6 +1207,19 @@ class RemoteDesktopViewer:
         except:
             pass
         self.win.destroy()
+    
+    def _toggle_fullscreen(self):
+        """切换全屏/窗口模式"""
+        if self._is_fullscreen:
+            self.win.attributes('-fullscreen', False)
+            self.win.state('zoomed')
+            self._is_fullscreen = False
+            self._fullscreen_btn.config(text='🔲全屏')
+        else:
+            self.win.state('normal')
+            self.win.attributes('-fullscreen', True)
+            self._is_fullscreen = True
+            self._fullscreen_btn.config(text='🔲窗口')
 
 
 # ===== Tkinter GUI =====
@@ -1320,13 +1350,24 @@ class ServerGUI:
             prog.grid(row=0, column=i*3+2, padx=2)
             setattr(self, f'{var_name.replace("_var","")}_progress', prog)
         
-        # 远程桌面大按钮（独立醒目）
+        # 远程桌面大按钮（独立醒目）+ 显示模式选择
         rdp_frame = tk.Frame(right_frame)
         rdp_frame.pack(fill='x', padx=10, pady=(5, 0))
-        tk.Button(rdp_frame, text='🖥️  远程桌面', bg='#8e44ad', fg='white',
+        
+        rdp_btn_frame = tk.Frame(rdp_frame)
+        rdp_btn_frame.pack(fill='x')
+        
+        # 显示模式选择
+        self.rdp_mode_var = tk.StringVar(value='最大化窗口')
+        mode_menu = tk.OptionMenu(rdp_btn_frame, self.rdp_mode_var, '全屏', '最大化窗口')
+        mode_menu.config(font=('Microsoft YaHei', 9), width=10, bg='#f0f0f0', highlightthickness=0)
+        mode_menu.pack(side='right', padx=(5, 0))
+        tk.Label(rdp_btn_frame, text='显示:', font=('Microsoft YaHei', 9), fg='#7f8c8d').pack(side='right')
+        
+        tk.Button(rdp_btn_frame, text='🖥️  远程桌面', bg='#8e44ad', fg='white',
                  font=('Microsoft YaHei', 13, 'bold'), command=self._cmd_remote_desktop,
                  height=1, cursor='hand2', activebackground='#7d3c98', activeforeground='white'
-                 ).pack(fill='x', pady=2)
+                 ).pack(side='left', fill='x', expand=True, pady=2)
         
         # 操作按钮区域（远程控制 + 文件传输 左右并排）
         action_row = tk.Frame(right_frame)
@@ -1478,9 +1519,9 @@ class ServerGUI:
             
             # 根据在线状态设置卡片背景色
             if online:
-                card_bg = '#abebc6' if cid == self.selected_client_id else '#d5f5e3'
+                card_bg = '#ffeaa7' if cid == self.selected_client_id else '#d5f5e3'
             else:
-                card_bg = '#e8f4f8' if cid == self.selected_client_id else 'white'
+                card_bg = '#ffeaa7' if cid == self.selected_client_id else 'white'
             
             # 设备卡片
             card = tk.Frame(self.device_list_frame, bg=card_bg, relief='raised', bd=1)
@@ -1789,8 +1830,9 @@ class ServerGUI:
             # 等待客户端服务启动
             time.sleep(1)
             
-            # 打开查看器
-            RemoteDesktopViewer(self.root, client_ip, self.selected_client_id, local_ip)
+            # 打开查看器（传入显示模式）
+            display_mode = self.rdp_mode_var.get()
+            RemoteDesktopViewer(self.root, client_ip, self.selected_client_id, local_ip, display_mode=display_mode)
             self.cmd_status_var.set('✅ 远程桌面已启动')
             self.cmd_status_label.config(fg='#27ae60')
             self.root.after(3000, lambda: self.cmd_status_var.set(''))

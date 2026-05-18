@@ -1507,8 +1507,11 @@ class ServerGUI:
             tk.Label(status_frame, text=status_text, font=('Microsoft YaHei', 8),
                     bg=card_bg, fg=status_fg).pack(side='left', padx=(2, 0))
             
-            # 文字标签 - 显示主机名+IP（别名移到编辑按钮左边）
-            content = f'{hostname}\nIP: {ip}'
+            # 文字标签 - 显示主机名+IP+别名换行
+            if alias:
+                content = f'{hostname}\nIP: {ip}\n[{alias}]'
+            else:
+                content = f'{hostname}\nIP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
@@ -1527,12 +1530,6 @@ class ServerGUI:
             edit_btn = tk.Label(btn_frame, text='✏️', font=('Microsoft YaHei', 10), 
                                bg=card_bg, cursor='hand2')
             edit_btn.pack(side='right')
-            
-            # 别名标签（编辑按钮左边，确保显示完整）
-            if alias:
-                alias_label = tk.Label(btn_frame, text=alias, font=('Microsoft YaHei', 10, 'bold'), 
-                                      bg=card_bg, fg='#2c3e50', anchor='e')
-                alias_label.pack(side='right', padx=(8, 4))
             
             def on_edit(event, cid=cid):
                 self._edit_device_alias(cid)

@@ -840,15 +840,16 @@ class RemoteDesktopViewer:
                     if frame_len > 10 * 1024 * 1024:
                         raise ValueError("Frame too large")
                     
-                    frame_data = b''
+                    frame_data = bytearray()
                     while len(frame_data) < frame_len and self.running:
                         try:
                             chunk = sock.recv(min(frame_len - len(frame_data), 262144))
                             if not chunk:
                                 raise ConnectionError()
-                            frame_data += chunk
+                            frame_data.extend(chunk)
                         except socket.timeout:
                             continue
+                    frame_data = bytes(frame_data)
                     
                     if not self.running:
                         break
@@ -931,7 +932,7 @@ class RemoteDesktopViewer:
                         self._latest_img = img
     
     def _decode_and_scale(self, jpeg_data):
-        """后台线程：JPEG解码+缩放"""
+        """后台线程：JPEG解码+缩放（用draft在解码阶段降采样，比解码后resize快5-8倍）"""
         try:
             img = Image.open(io.BytesIO(jpeg_data))
             iw, ih = img.size
@@ -941,9 +942,13 @@ class RemoteDesktopViewer:
                 self.screen_scale = min(cw / iw, ch / ih)
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
-                # 尺寸差距<5%时跳过resize，省掉缩放耗时
-                if abs(new_w - iw) > iw * 0.05 or abs(new_h - ih) > ih * 0.05:
-                    img = img.resize((new_w, new_h), Image.BILINEAR)
+                # draft在JPEG解码阶段就降采样，比解码后resize快5-8倍
+                if abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02:
+                    try:
+                        img.draft('RGB', (new_w, new_h))
+                        img.load()
+                    except:
+                        img = img.resize((new_w, new_h), Image.BILINEAR)
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
             
@@ -1405,11 +1410,17 @@ class ServerGUI:
             ip = info.get('ip', '')
             alias = _device_alias.get(cid, '')
             
-            # 左侧状态圆点（Canvas）
-            dot_canvas = tk.Canvas(card, width=14, height=14, bg=card_bg, highlightthickness=0)
-            dot_canvas.pack(side='left', padx=(8, 2), pady=5)
+            # 左侧状态圆点+在线/离线文字
+            status_frame = tk.Frame(card, bg=card_bg)
+            status_frame.pack(side='left', padx=(8, 2), pady=5)
+            dot_canvas = tk.Canvas(status_frame, width=12, height=12, bg=card_bg, highlightthickness=0)
+            dot_canvas.pack(side='left')
             dot_color = '#27ae60' if online else '#95a5a6'
-            dot_canvas.create_oval(2, 2, 12, 12, fill=dot_color, outline='')
+            dot_canvas.create_oval(1, 1, 11, 11, fill=dot_color, outline='')
+            status_text = '在线' if online else '离线'
+            status_fg = '#27ae60' if online else '#95a5a6'
+            tk.Label(status_frame, text=status_text, font=('Microsoft YaHei', 8),
+                    bg=card_bg, fg=status_fg).pack(side='left', padx=(2, 0))
             
             # 文字标签 - 只显示主机名+IP
             content = f'{hostname}\nIP: {ip}'

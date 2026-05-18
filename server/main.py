@@ -902,16 +902,20 @@ class RemoteDesktopViewer:
                 time.sleep(1)
     
     def _decode_worker(self):
-        """独立解码线程：收帧和解码并行，互不阻塞"""
+        """独立解码线程：收帧和解码并行，跳过积压帧只解码最新"""
         while self.running:
             raw = self._raw_frame
             if raw:
                 self._raw_frame = None
+                # 如果有更新的帧，跳过当前帧
+                while self._raw_frame is not None:
+                    raw = self._raw_frame
+                    self._raw_frame = None
                 img = self._decode_and_scale(raw)
                 if img:
                     self._latest_img = img
             else:
-                time.sleep(0.001)  # 没数据就歇1ms
+                time.sleep(0.001)
     
     def _decode_and_scale(self, jpeg_data):
         """后台线程：JPEG解码+缩放（不在主线程做，避免卡顿）"""
@@ -1255,11 +1259,14 @@ class ServerGUI:
         self.disk_progress.grid(row=2, column=2, padx=5)
         
         # 操作按钮区域
-        btn_frame = tk.LabelFrame(right_frame, text=' 远程控制 ', font=('Microsoft YaHei', 10, 'bold'))
-        btn_frame.pack(fill='x', padx=10, pady=5)
+        # 远程控制 + 文件传输 合并行
+        action_frame = tk.LabelFrame(right_frame, text=' 远程控制 & 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
+        action_frame.pack(fill='x', padx=10, pady=5)
         
-        btn_grid = tk.Frame(btn_frame)
-        btn_grid.pack(padx=10, pady=8)
+        # 左侧：操作按钮
+        btn_left = tk.Frame(action_frame)
+        btn_left.pack(side='left', fill='both', expand=True, padx=(10, 5), pady=8)
+        
         buttons = [
             ('关机', '#e74c3c', self._cmd_shutdown),
             ('重启', '#f39c12', self._cmd_restart),
@@ -1267,38 +1274,26 @@ class ServerGUI:
             ('音量-', '#3498db', self._cmd_volume_down),
             ('静音', '#3498db', self._cmd_mute),
             ('取消静音', '#3498db', self._cmd_unmute),
-            ('远程桌面', '#8e44ad', self._cmd_remote_desktop),
         ]
         for i, (text, color, cmd) in enumerate(buttons):
             row, col = i // 3, i % 3
-            tk.Button(btn_grid, text=text, width=10, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                     command=cmd).grid(row=row, column=col, padx=5, pady=5)
+            tk.Button(btn_left, text=text, width=8, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                     command=cmd).grid(row=row, column=col, padx=3, pady=3)
         
-        # 远程控制状态提示
-        self.cmd_status_var = tk.StringVar(value='')
-        self.cmd_status_label = tk.Label(btn_frame, textvariable=self.cmd_status_var, font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
-        self.cmd_status_label.pack(fill='x', padx=10, pady=(0, 5))
+        # 远程桌面按钮单独一行
+        tk.Button(btn_left, text='远程桌面', width=8, bg='#8e44ad', fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                 command=self._cmd_remote_desktop).grid(row=2, column=0, padx=3, pady=3)
+        tk.Button(btn_left, text='发送文件', width=8, bg='#27ae60', fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                 command=self._send_file).grid(row=2, column=1, padx=3, pady=3)
+        tk.Button(btn_left, text='选择文件', width=8, command=self._select_file).grid(row=2, column=2, padx=3, pady=3)
         
-        # 文件传输区域
-        file_frame = tk.LabelFrame(right_frame, text=' 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
-        file_frame.pack(fill='x', padx=10, pady=5)
+        # 状态提示
+        self.cmd_status_var = tk.StringVar(value='就绪')
+        self.cmd_status_label = tk.Label(btn_left, textvariable=self.cmd_status_var, font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
+        self.cmd_status_label.grid(row=3, column=0, columnspan=3, sticky='w', pady=(2, 0))
         
-        file_grid = tk.Frame(file_frame)
-        file_grid.pack(padx=10, pady=8)
-        
-        tk.Button(file_grid, text='选择文件', width=10, command=self._select_file).grid(row=0, column=0, padx=5, sticky='w')
         self.file_path_var = tk.StringVar(value='未选择文件')
-        tk.Label(file_grid, textvariable=self.file_path_var, font=('Microsoft YaHei', 8), anchor='w',
-                bg='white', relief='sunken', width=40).grid(row=0, column=1, padx=5, sticky='ew')
-        tk.Button(file_grid, text='发送文件', width=10, bg='#27ae60', fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                 command=self._send_file).grid(row=0, column=2, padx=5)
-        
-        # 传输状态
         self.transfer_status_var = tk.StringVar(value='就绪')
-        tk.Label(file_grid, text='状态：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=(5, 0))
-        tk.Label(file_grid, textvariable=self.transfer_status_var, font=('Microsoft YaHei', 9), anchor='w',
-                fg='#27ae60').grid(row=1, column=1, columnspan=2, sticky='w', pady=(5, 0))
-        
         self.selected_file = None
         
         # 底部状态栏

@@ -1147,12 +1147,20 @@ def _stream_frames(conn):
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
     
     prev_hash = None
+    last_send_time = 0
+    target_interval = 1.0 / 30  # 目标30fps
     
     # 预分配JPEG缓冲区
     jpeg_buf = io.BytesIO()
     
     try:
         while True:
+            # 帧率控制
+            now = time.time()
+            elapsed = now - last_send_time
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
+            
             screenshot = sct.grab(monitor)
             raw = screenshot.bgra
             
@@ -1167,6 +1175,7 @@ def _stream_frames(conn):
             
             # 发送
             conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
+            last_send_time = time.time()
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     except Exception as e:

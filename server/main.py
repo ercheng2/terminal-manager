@@ -1401,6 +1401,35 @@ class ServerGUI:
         self.cmd_status_label.pack(fill='x', padx=10)
         self.selected_file = None
         
+        # 底部：本地服务器信息
+        local_info_frame = tk.LabelFrame(self.root, text=' 本地服务器信息 ', font=('Microsoft YaHei', 9, 'bold'))
+        local_info_frame.pack(fill='x', padx=5, pady=(0, 2), side='bottom')
+        
+        local_grid = tk.Frame(local_info_frame)
+        local_grid.pack(padx=8, pady=4)
+        
+        # 获取本地信息
+        import platform
+        local_ip = _get_local_ip()
+        try:
+            import uuid as _uuid
+            local_mac = ':'.join([f'{b:02x}' for b in _uuid.getnode().to_bytes(6, 'big')])
+        except:
+            local_mac = '未知'
+        
+        local_items = [
+            ('主机名', platform.node()),
+            ('IP地址', local_ip),
+            ('MAC地址', local_mac),
+            ('系统', f'{platform.system()} {platform.release()}'),
+            ('架构', platform.machine()),
+        ]
+        for i, (k, v) in enumerate(local_items):
+            tk.Label(local_grid, text=f'{k}:', font=('Microsoft YaHei', 8), fg='#7f8c8d', anchor='e', width=7
+                    ).grid(row=0, column=i*2, sticky='e', padx=(4, 1))
+            tk.Label(local_grid, text=v, font=('Microsoft YaHei', 8), fg='#2c3e50', anchor='w'
+                    ).grid(row=0, column=i*2+1, sticky='w', padx=(0, 8))
+        
         # 底部状态栏
         status_bar = tk.Frame(self.root, bg='#34495e', height=28)
         status_bar.pack(fill='x', side='bottom')
@@ -1475,11 +1504,8 @@ class ServerGUI:
             tk.Label(status_frame, text=status_text, font=('Microsoft YaHei', 8),
                     bg=card_bg, fg=status_fg).pack(side='left', padx=(2, 0))
             
-            # 文字标签 - 显示别名+主机名+IP
-            if alias:
-                content = f'[{alias}] {hostname}\nIP: {ip}'
-            else:
-                content = f'{hostname}\nIP: {ip}'
+            # 文字标签 - 显示主机名+IP（别名移到编辑按钮左边）
+            content = f'{hostname}\nIP: {ip}'
             lbl = tk.Label(card, text=content, font=('Microsoft YaHei', 9), 
                           bg=card_bg,
                           anchor='w', justify='left')
@@ -1498,6 +1524,12 @@ class ServerGUI:
             edit_btn = tk.Label(btn_frame, text='✏️', font=('Microsoft YaHei', 10), 
                                bg=card_bg, cursor='hand2')
             edit_btn.pack(side='right')
+            
+            # 别名标签（编辑按钮左边）
+            if alias:
+                alias_label = tk.Label(btn_frame, text=alias, font=('Microsoft YaHei', 10, 'bold'), 
+                                      bg=card_bg, fg='#2c3e50', anchor='e')
+                alias_label.pack(side='right', padx=(8, 4))
             
             def on_edit(event, cid=cid):
                 self._edit_device_alias(cid)
@@ -1822,8 +1854,8 @@ class ServerGUI:
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
-                self.transfer_status_var.set(f'✅ 发送成功: {filename}')
-                self.root.after(3000, lambda: self.transfer_status_var.set('就绪'))
+                self.transfer_status_var.set(f'✅ 发送成功，对方已接收完毕: {filename}')
+                self.root.after(8000, lambda: self.transfer_status_var.set('就绪'))
         except Exception as e:
             self.transfer_status_var.set(f'❌ 发送失败: {e}')
             self.root.after(5000, lambda: self.transfer_status_var.set('就绪'))

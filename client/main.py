@@ -1203,6 +1203,7 @@ def _stream_server_loop(port):
         try:
             conn, addr = _stream_server_sock.accept()
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
             print(f'[远程桌面] 服务器连接: {addr}')
             t = threading.Thread(target=_stream_frames, args=(conn,), daemon=True)
             t.start()

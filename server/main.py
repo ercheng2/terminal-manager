@@ -745,8 +745,10 @@ class RemoteDesktopViewer:
         self.fps_timer = time.time()
         self._last_move_time = 0  # 鼠标移动节流
         self._canvas_size = (1024, 700)  # 缓存canvas尺寸
-        self._latest_img = None  # 后台解码完的PIL Image
-        self._display_active = False  # 显示循环是否在跑
+        self._latest_img = None  # 后台解码完的PIL Image（只保留最新一帧）
+        
+        # 启动主线程轮询显示
+        self._poll_display()
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
@@ -855,7 +857,6 @@ class RemoteDesktopViewer:
                     img = self._decode_and_scale(frame_data)
                     if img:
                         self._latest_img = img
-                        self._try_start_display()
                 
             except Exception as e:
                 if not self.running:
@@ -901,7 +902,6 @@ class RemoteDesktopViewer:
                 img = self._decode_and_scale(jpeg_data)
                 if img:
                     self._latest_img = img
-                    self._try_start_display()
                 
             except Exception as e:
                 if not self.running:
@@ -928,20 +928,15 @@ class RemoteDesktopViewer:
         except:
             return None
     
-    def _try_start_display(self):
-        """触发显示循环（只启动一次，循环中自动取最新帧）"""
-        if not self._display_active:
-            self._display_active = True
-            self.win.after(0, self._display_loop)
-    
-    def _display_loop(self):
-        """显示循环：只拿最新帧显示，中间帧全部丢弃"""
-        img = self._latest_img
-        self._latest_img = None
+    def _poll_display(self):
+        """主线程轮询：每16ms检查有没有新帧，有就显示"""
+        if not self.running:
+            return
         
-        if img and self.running:
+        img = self._latest_img
+        if img:
+            self._latest_img = None
             try:
-                # 更新canvas尺寸缓存
                 cw = self.canvas.winfo_width()
                 ch = self.canvas.winfo_height()
                 if cw > 100 and ch > 100:
@@ -953,11 +948,7 @@ class RemoteDesktopViewer:
             except Exception as e:
                 print(f'[远程桌面] 显示失败: {e}')
         
-        # 如果还有新帧，继续循环；否则停止
-        if self._latest_img and self.running:
-            self.win.after(0, self._display_loop)
-        else:
-            self._display_active = False
+        self.win.after(16, self._poll_display)
     
     def _show_frame(self, img):
         """直接显示一帧（备用）"""

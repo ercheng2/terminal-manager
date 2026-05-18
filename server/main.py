@@ -1224,6 +1224,15 @@ class RemoteDesktopViewer:
 
 
 # ===== Tkinter GUI =====
+# ===== 注册码生成工具 =====
+import hashlib
+
+def _generate_activation_key(serial):
+    """根据序列号生成注册码"""
+    secret = 'KZC-ACTIVATE-2026-SECRET'
+    h = hashlib.sha256((serial + secret).encode()).hexdigest().upper()
+    return f'{h[0:4]}-{h[4:8]}-{h[8:12]}-{h[12:16]}'
+
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
@@ -1251,6 +1260,13 @@ class ServerGUI:
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
+        
+        # 工具栏
+        toolbar = tk.Frame(self.root, bg='#34495e', height=30)
+        toolbar.pack(fill='x')
+        toolbar.pack_propagate(False)
+        tk.Button(toolbar, text='🔑生成注册码', bg='#8e44ad', fg='white', font=('Microsoft YaHei', 9, 'bold'),
+                 command=self._gen_activation_key, cursor='hand2').pack(side='left', padx=10, pady=2)
         
         # 统计卡片区域
         stats_frame = tk.Frame(self.root, bg='#ecf0f1')
@@ -1799,6 +1815,35 @@ class ServerGUI:
     
     def _cmd_unmute(self):
         self._send_command('unmute')
+    
+    def _gen_activation_key(self):
+        """生成注册码工具"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title('注册码生成工具')
+        dlg.geometry('420x220')
+        dlg.resizable(False, False)
+        
+        tk.Label(dlg, text='注册码生成', font=('Microsoft YaHei', 14, 'bold')).pack(pady=(15, 10))
+        tk.Label(dlg, text='请输入客户端序列号：', font=('Microsoft YaHei', 9)).pack(padx=20, anchor='w')
+        
+        var_serial = tk.StringVar()
+        tk.Entry(dlg, textvariable=var_serial, width=30, font=('Consolas', 11)).pack(padx=20, fill='x')
+        
+        result_var = tk.StringVar(value='')
+        tk.Label(dlg, textvariable=result_var, font=('Consolas', 12, 'bold'), fg='#27ae60').pack(pady=10)
+        
+        def gen():
+            serial = var_serial.get().strip().upper()
+            if not serial:
+                messagebox.showwarning('提示', '请输入序列号')
+                return
+            key = _generate_activation_key(serial)
+            result_var.set(f'注册码: {key}')
+            dlg.clipboard_clear()
+            dlg.clipboard_append(key)
+        
+        tk.Button(dlg, text='生成并复制', command=gen, bg='#8e44ad', fg='white',
+                 font=('Microsoft YaHei', 10, 'bold'), width=15).pack(pady=5)
     
     def _cmd_remote_desktop(self):
         """启动远程桌面"""

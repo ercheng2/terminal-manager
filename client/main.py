@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     "activated": False,
     "activation_key": "",
     "download_dir": "",
+    "first_run_ts": 0,  # 首次运行时间戳（秒），服务器时间获取
 }
 
 def load_config():
@@ -91,6 +92,83 @@ def save_config(cfg):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
+
+# ===== 试用期 & 激活机制 =====
+import hashlib
+
+def _get_machine_id():
+    """获取机器唯一标识（MAC+主机名）"""
+    import uuid
+    mac = ':'.join([f'{b:02x}' for b in uuid.getnode().to_bytes(6, 'big')])
+    hostname = os.environ.get('COMPUTERNAME', os.environ.get('HOSTNAME', 'unknown'))
+    return f'{mac}-{hostname}'
+
+def _get_serial_number():
+    """生成序列号（基于机器特征）"""
+    mid = _get_machine_id()
+    h = hashlib.sha256(mid.encode()).hexdigest().upper()
+    # 格式: KZC-XXXX-XXXX-XXXX
+    return f'KZC-{h[0:4]}-{h[4:8]}-{h[8:12]}'
+
+def _generate_activation_key(serial):
+    """根据序列号生成注册码（固定密钥）"""
+    secret = 'KZC-ACTIVATE-2026-SECRET'
+    h = hashlib.sha256((serial + secret).encode()).hexdigest().upper()
+    return f'{h[0:4]}-{h[4:8]}-{h[8:12]}-{h[12:16]}'
+
+def _verify_activation(serial, key):
+    """验证注册码是否正确"""
+    expected = _generate_activation_key(serial)
+    return key.upper() == expected
+
+def _get_server_time():
+    """从互联网获取服务器时间（防止改本地时间绕过）"""
+    try:
+        import urllib.request
+        # 尝试多个时间API
+        for url in ['http://worldtimeapi.org/api/timezone/Asia/Shanghai',
+                     'http://api.m.taobao.com/rest/api3.do?api=mtop.common.getTimestamp']:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+                    if 'unixtime' in data:
+                        return int(data['unixtime'])
+                    if 'data' in data and 't' in data['data']:
+                        return int(data['data']['t']) // 1000
+            except:
+                continue
+    except:
+        pass
+    # 获取不到就用本地时间
+    return int(time.time())
+
+def _is_trial_expired(cfg):
+    """检查试用期是否过期（30天）"""
+    if cfg.get('activated'):
+        return False
+    first_ts = cfg.get('first_run_ts', 0)
+    if first_ts == 0:
+        # 首次运行，记录时间
+        first_ts = _get_server_time()
+        cfg['first_run_ts'] = first_ts
+        save_config(cfg)
+    # 用服务器时间判断
+    now_ts = _get_server_time()
+    elapsed_days = (now_ts - first_ts) / 86400
+    return elapsed_days > 30
+
+def _get_remaining_days(cfg):
+    """获取剩余试用天数"""
+    if cfg.get('activated'):
+        return -1  # 已激活，无限
+    first_ts = cfg.get('first_run_ts', 0)
+    if first_ts == 0:
+        return 30
+    now_ts = _get_server_time()
+    elapsed_days = (now_ts - first_ts) / 86400
+    remaining = 30 - elapsed_days
+    return max(0, int(remaining))
 
 # ===== Windows注册表操作 =====
 REG_RUN_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
@@ -1538,6 +1616,8 @@ class TerminalApp:
         status_frame.pack_propagate(False)
         self.lbl_activate = tk.Label(status_frame, text='未激活', font=('Microsoft YaHei', 9), fg='#e74c3c', bg='#ecf0f1')
         self.lbl_activate.pack(side='left', padx=15)
+        self.lbl_trial = tk.Label(status_frame, text='', font=('Microsoft YaHei', 9), fg='#f39c12', bg='#ecf0f1')
+        self.lbl_trial.pack(side='left')
         self.lbl_volume = tk.Label(status_frame, text='音量：--', font=('Microsoft YaHei', 9), fg='#2c3e50', bg='#ecf0f1')
         self.lbl_volume.pack(side='left', padx=15)
         self.lbl_network = tk.Label(status_frame, text='通讯：未连接', font=('Microsoft YaHei', 9), fg='#e74c3c', bg='#ecf0f1')
@@ -1620,8 +1700,10 @@ class TerminalApp:
         dl_dir_frame = tk.Frame(net_grid)
         dl_dir_frame.grid(row=3, column=1, pady=2, padx=5, sticky='w')
         self.var_download_dir = tk.StringVar(value='')
-        tk.Entry(dl_dir_frame, textvariable=self.var_download_dir, width=25, font=('Microsoft YaHei', 9)).pack(side='left')
-        tk.Button(dl_dir_frame, text='浏览', width=5, command=self._browse_download_dir).pack(side='left', padx=3)
+        self.entry_download_dir = tk.Entry(dl_dir_frame, textvariable=self.var_download_dir, width=25, font=('Microsoft YaHei', 9))
+        self.entry_download_dir.pack(side='left')
+        self.btn_browse_download = tk.Button(dl_dir_frame, text='浏览', width=5, command=self._browse_download_dir)
+        self.btn_browse_download.pack(side='left', padx=3)
         
         self.var_min_tray = tk.BooleanVar(value=False)
         tk.Checkbutton(net_grid, text='启动时最小化到托盘', variable=self.var_min_tray, font=('Microsoft YaHei', 9)).grid(row=4, column=0, columnspan=2, sticky='w', pady=2)
@@ -1640,9 +1722,12 @@ class TerminalApp:
         self.delay_tree.pack(fill='x', padx=5, pady=3)
         delay_btn_frame = tk.Frame(delay_frame)
         delay_btn_frame.pack(pady=3)
-        tk.Button(delay_btn_frame, text='添加应用', width=10, command=self._add_delayed_app).pack(side='left', padx=3)
-        tk.Button(delay_btn_frame, text='删除', width=8, command=self._del_delayed_app).pack(side='left', padx=3)
-        tk.Button(delay_btn_frame, text='立即启动', width=10, command=self._launch_delayed).pack(side='left', padx=3)
+        self.btn_add_delayed = tk.Button(delay_btn_frame, text='添加应用', width=10, command=self._add_delayed_app)
+        self.btn_add_delayed.pack(side='left', padx=3)
+        self.btn_del_delayed = tk.Button(delay_btn_frame, text='删除', width=8, command=self._del_delayed_app)
+        self.btn_del_delayed.pack(side='left', padx=3)
+        self.btn_launch_delayed = tk.Button(delay_btn_frame, text='立即启动', width=10, command=self._launch_delayed)
+        self.btn_launch_delayed.pack(side='left', padx=3)
 
         # 启动项设置
         startup_frame = tk.LabelFrame(right_frame, text=' 启动项设置（Windows开机启动） ', font=('Microsoft YaHei', 10, 'bold'))
@@ -1660,9 +1745,12 @@ class TerminalApp:
         self.startup_tree.pack(fill='both', expand=True, padx=5, pady=3)
         startup_btn_frame = tk.Frame(startup_frame)
         startup_btn_frame.pack(pady=3)
-        tk.Button(startup_btn_frame, text='添加', width=8, command=self._add_startup).pack(side='left', padx=3)
-        tk.Button(startup_btn_frame, text='删除', width=8, command=self._del_startup).pack(side='left', padx=3)
-        tk.Button(startup_btn_frame, text='启用/禁用', width=10, command=self._toggle_startup).pack(side='left', padx=3)
+        self.btn_add_startup = tk.Button(startup_btn_frame, text='添加', width=8, command=self._add_startup)
+        self.btn_add_startup.pack(side='left', padx=3)
+        self.btn_del_startup = tk.Button(startup_btn_frame, text='删除', width=8, command=self._del_startup)
+        self.btn_del_startup.pack(side='left', padx=3)
+        self.btn_toggle_startup = tk.Button(startup_btn_frame, text='启用/禁用', width=10, command=self._toggle_startup)
+        self.btn_toggle_startup.pack(side='left', padx=3)
 
         # 底部按钮
         bottom_frame = tk.Frame(self.root, bg='#ecf0f1', height=36)
@@ -1685,13 +1773,47 @@ class TerminalApp:
             desktop = os.path.expandvars('%USERPROFILE%\\Desktop')
             dl_dir = os.path.join(desktop, 'KZC_Received')
         self.var_download_dir.set(dl_dir)
-        if cfg.get('activated'):
-            self.lbl_activate.config(text='已激活（永久版）', fg='#27ae60')
+        
+        # 激活状态 & 试用期
+        self._update_activation_ui()
+        
         for item in cfg.get('delayed_apps', []):
             self.delay_tree.insert('', 'end', values=(item['name'], item.get('delay', 0), item['path']))
         for item in cfg.get('startup_items', []):
             en = '✓' if item.get('enabled', True) else '✗'
             self.startup_tree.insert('', 'end', values=(en, item['name'], item.get('delay', 0), item['path']))
+    
+    def _update_activation_ui(self):
+        """更新激活状态UI"""
+        cfg = self.config
+        if cfg.get('activated'):
+            self.lbl_activate.config(text='已激活（永久版）', fg='#27ae60')
+            self.lbl_trial.config(text='')
+            self._set_trial_widgets_state('normal')
+        else:
+            remaining = _get_remaining_days(cfg)
+            if remaining <= 0:
+                self.lbl_activate.config(text='试用已过期', fg='#e74c3c')
+                self.lbl_trial.config(text='请激活软件继续使用', fg='#e74c3c')
+            else:
+                self.lbl_activate.config(text=f'试用版（剩余{remaining}天）', fg='#f39c12')
+                self.lbl_trial.config(text='')
+            self._set_trial_widgets_state('disabled')
+    
+    def _set_trial_widgets_state(self, state):
+        """设置试用期限制控件的可用状态"""
+        disabled = state == 'disabled'
+        # 下载目录
+        self.entry_download_dir.config(state=state)
+        self.btn_browse_download.config(state=state)
+        # 延时启动
+        self.btn_add_delayed.config(state=state)
+        self.btn_del_delayed.config(state=state)
+        self.btn_launch_delayed.config(state=state)
+        # 启动项
+        self.btn_add_startup.config(state=state)
+        self.btn_del_startup.config(state=state)
+        self.btn_toggle_startup.config(state=state)
 
     # ==================== 音量操作 ====================
     def _browse_download_dir(self):
@@ -1935,25 +2057,47 @@ class TerminalApp:
         messagebox.showinfo('提示', '设置已保存')
 
     def _activate(self):
+        """激活软件 - 显示序列号，输入注册码"""
+        if self.config.get('activated'):
+            messagebox.showinfo('提示', '软件已激活，无需重复操作')
+            return
+        
+        serial = _get_serial_number()
+        
         dlg = tk.Toplevel(self.root)
-        dlg.title('激活软件')
-        dlg.geometry('350x150')
+        dlg.title('软件激活')
+        dlg.geometry('420x280')
         dlg.resizable(False, False)
-        tk.Label(dlg, text='请输入激活码：', font=('Microsoft YaHei', 10)).pack(pady=10)
+        
+        tk.Label(dlg, text='软件激活', font=('Microsoft YaHei', 14, 'bold')).pack(pady=(15, 10))
+        
+        # 序列号
+        tk.Label(dlg, text='本机序列号（发送给供应商获取注册码）：', font=('Microsoft YaHei', 9)).pack(padx=20, anchor='w')
+        serial_frame = tk.Frame(dlg)
+        serial_frame.pack(padx=20, fill='x')
+        tk.Entry(serial_frame, textvariable=tk.StringVar(value=serial), width=30, 
+                font=('Consolas', 11), state='readonly', readonlybackground='#f5f5f5').pack(side='left', fill='x', expand=True)
+        tk.Button(serial_frame, text='复制', width=5, command=lambda: dlg.clipboard_clear() or dlg.clipboard_append(serial)).pack(side='left', padx=5)
+        
+        # 注册码输入
+        tk.Label(dlg, text='请输入注册码：', font=('Microsoft YaHei', 9)).pack(padx=20, anchor='w', pady=(15, 2))
         var_key = tk.StringVar()
-        tk.Entry(dlg, textvariable=var_key, width=30).pack()
+        tk.Entry(dlg, textvariable=var_key, width=30, font=('Consolas', 11)).pack(padx=20, fill='x')
+        
         def do_activate():
-            key = var_key.get().strip()
-            if key == 'KZC-2026-PERMANENT':
+            key = var_key.get().strip().upper()
+            if _verify_activation(serial, key):
                 self.config['activated'] = True
                 self.config['activation_key'] = key
                 save_config(self.config)
-                self.lbl_activate.config(text='已激活（永久版）', fg='#27ae60')
+                self._update_activation_ui()
                 dlg.destroy()
-                messagebox.showinfo('成功', '软件已激活！')
+                messagebox.showinfo('成功', '软件已激活！所有功能已解锁。')
             else:
-                messagebox.showerror('错误', '激活码无效')
-        tk.Button(dlg, text='激活', command=do_activate, bg='#3498db', fg='white', font=('Microsoft YaHei', 10, 'bold')).pack(pady=10)
+                messagebox.showerror('错误', '注册码无效，请检查后重试')
+        
+        tk.Button(dlg, text='激活', command=do_activate, bg='#3498db', fg='white', 
+                 font=('Microsoft YaHei', 10, 'bold'), width=12).pack(pady=15)
 
     def _refresh_status(self):
         self._update_volume_display()

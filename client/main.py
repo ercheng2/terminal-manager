@@ -1013,6 +1013,51 @@ _last_screen_hash = None
 _last_screen_jpeg = None
 _screen_quality = 95
 
+def _execute_input(input_data):
+    """执行单条输入指令"""
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    input_type = input_data.get('input_type', '')
+    
+    if input_type == 'mouse_move':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        pyautogui.moveTo(x, y, _pause=False)
+    elif input_type == 'mouse_press':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        button = input_data.get('button', 'left')
+        pyautogui.mouseDown(x, y, button=button, _pause=False)
+    elif input_type == 'mouse_release':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        button = input_data.get('button', 'left')
+        pyautogui.mouseUp(x, y, button=button, _pause=False)
+    elif input_type == 'mouse_click':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        button = input_data.get('button', 'left')
+        clicks = input_data.get('clicks', 1)
+        pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
+    elif input_type == 'mouse_drag':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        pyautogui.moveTo(x, y, _pause=False)
+    elif input_type == 'scroll':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        delta = input_data.get('delta', 0)
+        pyautogui.scroll(delta, x, y, _pause=False)
+    elif input_type == 'key_press':
+        key = input_data.get('key', '')
+        if key:
+            pyautogui.press(key, _pause=False)
+    elif input_type == 'key_hotkey':
+        keys = input_data.get('keys', [])
+        if keys:
+            pyautogui.hotkey(*keys, _pause=False)
+    elif input_type == 'type_text':
+        text = input_data.get('text', '')
+        if text:
+            pyautogui.typewrite(text, _pause=False)
+    elif input_type == 'set_quality':
+        global _screen_quality
+        _screen_quality = input_data.get('quality', 50)
+
 class ScreenHandler(BaseHTTPRequestHandler):
     """截屏HTTP请求处理器"""
     
@@ -1093,45 +1138,12 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 
                 input_type = input_data.get('input_type', '')
                 
-                if input_type == 'mouse_move':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    pyautogui.moveTo(x, y, _pause=False)
-                elif input_type == 'mouse_press':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    button = input_data.get('button', 'left')
-                    pyautogui.mouseDown(x, y, button=button, _pause=False)
-                elif input_type == 'mouse_release':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    button = input_data.get('button', 'left')
-                    pyautogui.mouseUp(x, y, button=button, _pause=False)
-                elif input_type == 'mouse_click':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    button = input_data.get('button', 'left')
-                    clicks = input_data.get('clicks', 1)
-                    pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
-                elif input_type == 'mouse_drag':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    button = input_data.get('button', 'left')
-                    pyautogui.moveTo(x, y, _pause=False)
-                elif input_type == 'scroll':
-                    x, y = input_data.get('x', 0), input_data.get('y', 0)
-                    delta = input_data.get('delta', 0)
-                    pyautogui.scroll(delta, x, y, _pause=False)
-                elif input_type == 'key_press':
-                    key = input_data.get('key', '')
-                    if key:
-                        pyautogui.press(key, _pause=False)
-                elif input_type == 'key_hotkey':
-                    keys = input_data.get('keys', [])
-                    if keys:
-                        pyautogui.hotkey(*keys, _pause=False)
-                elif input_type == 'type_text':
-                    text = input_data.get('text', '')
-                    if text:
-                        pyautogui.typewrite(text, _pause=False)
-                elif input_type == 'set_quality':
-                    global _screen_quality
-                    _screen_quality = input_data.get('quality', 50)
+                # 批量指令支持：合并多条指令一次HTTP请求
+                if input_type == 'batch':
+                    for item in input_data.get('items', []):
+                        _execute_input(item)
+                else:
+                    _execute_input(input_data)
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -1328,47 +1340,14 @@ class CommandHandler:
             stop_remote_desktop_server()
             result = {'status': 'success', 'msg': '远程桌面服务已停止'}
         elif cmd == 'remote_input':
-            # 远程输入指令
-            import pyautogui
-            pyautogui.FAILSAFE = False
+            # 远程输入指令（支持batch批量）
             input_type = data.get('input_type', '')
             try:
-                if input_type == 'mouse_move':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    pyautogui.moveTo(x, y, _pause=False)
-                elif input_type == 'mouse_press':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    button = data.get('button', 'left')
-                    pyautogui.mouseDown(x, y, button=button, _pause=False)
-                elif input_type == 'mouse_release':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    button = data.get('button', 'left')
-                    pyautogui.mouseUp(x, y, button=button, _pause=False)
-                elif input_type == 'mouse_click':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    button = data.get('button', 'left')
-                    clicks = data.get('clicks', 1)
-                    pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
-                elif input_type == 'mouse_drag':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    button = data.get('button', 'left')
-                    pyautogui.moveTo(x, y, _pause=False)
-                elif input_type == 'scroll':
-                    x, y = data.get('x', 0), data.get('y', 0)
-                    delta = data.get('delta', 0)
-                    pyautogui.scroll(delta, x, y, _pause=False)
-                elif input_type == 'key_press':
-                    key = data.get('key', '')
-                    if key:
-                        pyautogui.press(key, _pause=False)
-                elif input_type == 'key_hotkey':
-                    keys = data.get('keys', [])
-                    if keys:
-                        pyautogui.hotkey(*keys, _pause=False)
-                elif input_type == 'type_text':
-                    text = data.get('text', '')
-                    if text:
-                        pyautogui.typewrite(text, _pause=False)
+                if input_type == 'batch':
+                    for item in data.get('items', []):
+                        _execute_input(item)
+                else:
+                    _execute_input(data)
                 result = {'status': 'success', 'msg': f'输入已执行: {input_type}'}
             except Exception as e:
                 result = {'status': 'failed', 'msg': f'输入执行失败: {e}'}

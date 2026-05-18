@@ -1051,48 +1051,59 @@ class RemoteDesktopViewer:
         self._input_queue.put(input_data)
     
     def _input_sender(self):
-        """输入发送线程——从队列取指令，HTTP POST到客户端5901/input"""
-        # 使用HTTP持久连接
+        """输入发送线程——批量合并指令，HTTP长连接复用"""
         import http.client
+        conn = None
         while self.running:
             try:
-                # 批量取出队列中的指令（最多10条，避免积压）
+                # 批量取出队列中的指令
                 batch = []
                 try:
                     item = self._input_queue.get(timeout=0.05)
                     batch.append(item)
                 except queue.Empty:
+                    # 空闲时关闭长连接，避免占用资源
+                    if conn:
+                        try:
+                            conn.close()
+                        except:
+                            pass
+                        conn = None
                     continue
                 
-                # 非阻塞取出剩余
-                while not self._input_queue.empty() and len(batch) < 10:
+                # 非阻塞取出剩余（最多10ms内积压的）
+                deadline = time.time() + 0.01
+                while not self._input_queue.empty() and len(batch) < 20 and time.time() < deadline:
                     try:
                         batch.append(self._input_queue.get_nowait())
                     except queue.Empty:
                         break
                 
-                # 对于同类指令只发最后一条（去重优化）
-                # mouse_move和mouse_drag只保留最后一条
+                # 去重：mouse_move/mouse_drag只保留最后一条
                 deduped = {}
                 for item in batch:
                     itype = item.get('input_type', '')
-                    # 移动和拖拽类只保留最后一个
                     if itype in ('mouse_move', 'mouse_drag'):
                         deduped[itype] = item
                     else:
-                        # 点击/按键类全部保留
                         deduped[f'{itype}_{len(deduped)}'] = item
                 
-                # 逐条发送
-                for item in deduped.values():
-                    try:
+                # 合并为一次HTTP请求发送（减少TCP连接开销）
+                items = list(deduped.values())
+                try:
+                    if not conn:
                         conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=1)
-                        data = json.dumps(item).encode('utf-8')
-                        conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
-                        conn.getresponse()
+                    data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
+                    conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+                    resp = conn.getresponse()
+                    resp.read()  # 必须读完response才能复用连接
+                except:
+                    # 连接断开，重建
+                    try:
                         conn.close()
                     except:
                         pass
+                    conn = None
             except:
                 pass
     

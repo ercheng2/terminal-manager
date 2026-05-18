@@ -746,6 +746,7 @@ class RemoteDesktopViewer:
         self._last_move_time = 0  # 鼠标移动节流
         self._canvas_size = (1024, 700)  # 缓存canvas尺寸
         self._latest_img = None  # 后台解码完的PIL Image
+        self._display_active = False  # 显示循环是否在跑
         
         # 输入指令队列 + 异步发送线程
         self._input_queue = queue.Queue()
@@ -853,7 +854,8 @@ class RemoteDesktopViewer:
                     # 后台解码+缩放（重活在后台做）
                     img = self._decode_and_scale(frame_data)
                     if img:
-                        self.win.after(0, lambda i=img: self._show_frame(i))
+                        self._latest_img = img
+                        self._try_start_display()
                 
             except Exception as e:
                 if not self.running:
@@ -898,7 +900,8 @@ class RemoteDesktopViewer:
                 # 后台解码+缩放
                 img = self._decode_and_scale(jpeg_data)
                 if img:
-                    self.win.after(0, lambda i=img: self._show_frame(i))
+                    self._latest_img = img
+                    self._try_start_display()
                 
             except Exception as e:
                 if not self.running:
@@ -925,10 +928,40 @@ class RemoteDesktopViewer:
         except:
             return None
     
+    def _try_start_display(self):
+        """触发显示循环（只启动一次，循环中自动取最新帧）"""
+        if not self._display_active:
+            self._display_active = True
+            self.win.after(0, self._display_loop)
+    
+    def _display_loop(self):
+        """显示循环：只拿最新帧显示，中间帧全部丢弃"""
+        img = self._latest_img
+        self._latest_img = None
+        
+        if img and self.running:
+            try:
+                # 更新canvas尺寸缓存
+                cw = self.canvas.winfo_width()
+                ch = self.canvas.winfo_height()
+                if cw > 100 and ch > 100:
+                    self._canvas_size = (cw, ch)
+                
+                self.current_photo = ImageTk.PhotoImage(img)
+                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+                self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
+            except Exception as e:
+                print(f'[远程桌面] 显示失败: {e}')
+        
+        # 如果还有新帧，继续循环；否则停止
+        if self._latest_img and self.running:
+            self.win.after(0, self._display_loop)
+        else:
+            self._display_active = False
+    
     def _show_frame(self, img):
-        """主线程：只做PhotoImage+更新canvas（极快，<5ms）"""
+        """直接显示一帧（备用）"""
         try:
-            # 更新canvas尺寸缓存
             cw = self.canvas.winfo_width()
             ch = self.canvas.winfo_height()
             if cw > 100 and ch > 100:

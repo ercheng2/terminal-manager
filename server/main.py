@@ -736,6 +736,8 @@ class RemoteDesktopViewer:
         self.canvas.bind('<MouseWheel>', self._on_scroll)
         self.canvas.bind('<Key>', self._on_key_press)
         self.canvas.focus_set()
+        # 窗口大小变化时更新canvas缓存尺寸
+        self.canvas.bind('<Configure>', self._on_canvas_resize)
         
         # 当前显示的图片
         self.current_photo = None
@@ -1126,6 +1128,11 @@ class RemoteDesktopViewer:
         self._last_move_time = now
         x, y = self._canvas_to_client(event.x, event.y)
         self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
+    
+    def _on_canvas_resize(self, event):
+        """canvas尺寸变化时更新缓存，触发重新缩放"""
+        if event.width > 100 and event.height > 100:
+            self._canvas_size = (event.width, event.height)
     
     def _on_scroll(self, event):
         x, y = self._canvas_to_client(event.x, event.y)

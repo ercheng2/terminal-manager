@@ -918,7 +918,7 @@ class RemoteDesktopViewer:
                 time.sleep(0.001)
     
     def _decode_and_scale(self, jpeg_data):
-        """后台线程：JPEG解码+缩放（不在主线程做，避免卡顿）"""
+        """后台线程：JPEG解码+缩放"""
         try:
             img = Image.open(io.BytesIO(jpeg_data))
             iw, ih = img.size
@@ -1259,38 +1259,42 @@ class ServerGUI:
         self.disk_progress.grid(row=2, column=2, padx=5)
         
         # 操作按钮区域
-        # 远程控制 + 文件传输 合并行
-        action_frame = tk.LabelFrame(right_frame, text=' 远程控制 & 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
+        action_frame = tk.LabelFrame(right_frame, text=' 操作 ', font=('Microsoft YaHei', 10, 'bold'))
         action_frame.pack(fill='x', padx=10, pady=5)
         
-        # 左侧：操作按钮
-        btn_left = tk.Frame(action_frame)
-        btn_left.pack(side='left', fill='both', expand=True, padx=(10, 5), pady=8)
+        btn_grid = tk.Frame(action_frame)
+        btn_grid.pack(padx=8, pady=6)
         
-        buttons = [
+        # 第一行：远程桌面(大按钮) + 文件传输
+        tk.Button(btn_grid, text='🖥 远程桌面', width=12, bg='#8e44ad', fg='white', 
+                 font=('Microsoft YaHei', 10, 'bold'), command=self._cmd_remote_desktop
+                 ).grid(row=0, column=0, padx=4, pady=3, rowspan=2)
+        
+        tk.Button(btn_grid, text='选择文件', width=10, command=self._select_file
+                 ).grid(row=0, column=1, padx=4, pady=3)
+        tk.Button(btn_grid, text='发送文件', width=10, bg='#27ae60', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._send_file
+                 ).grid(row=1, column=1, padx=4, pady=3)
+        
+        # 第二行：系统控制按钮
+        ctrl_buttons = [
             ('关机', '#e74c3c', self._cmd_shutdown),
             ('重启', '#f39c12', self._cmd_restart),
-            ('音量+', '#3498db', self._cmd_volume_up),
-            ('音量-', '#3498db', self._cmd_volume_down),
             ('静音', '#3498db', self._cmd_mute),
             ('取消静音', '#3498db', self._cmd_unmute),
+            ('音量+', '#3498db', self._cmd_volume_up),
+            ('音量-', '#3498db', self._cmd_volume_down),
         ]
-        for i, (text, color, cmd) in enumerate(buttons):
-            row, col = i // 3, i % 3
-            tk.Button(btn_left, text=text, width=8, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                     command=cmd).grid(row=row, column=col, padx=3, pady=3)
-        
-        # 远程桌面按钮单独一行
-        tk.Button(btn_left, text='远程桌面', width=8, bg='#8e44ad', fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                 command=self._cmd_remote_desktop).grid(row=2, column=0, padx=3, pady=3)
-        tk.Button(btn_left, text='发送文件', width=8, bg='#27ae60', fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                 command=self._send_file).grid(row=2, column=1, padx=3, pady=3)
-        tk.Button(btn_left, text='选择文件', width=8, command=self._select_file).grid(row=2, column=2, padx=3, pady=3)
+        for i, (text, color, cmd) in enumerate(ctrl_buttons):
+            tk.Button(btn_grid, text=text, width=8, bg=color, fg='white',
+                     font=('Microsoft YaHei', 9, 'bold'), command=cmd
+                     ).grid(row=2 + i // 3, column=i % 3, padx=3, pady=2)
         
         # 状态提示
         self.cmd_status_var = tk.StringVar(value='就绪')
-        self.cmd_status_label = tk.Label(btn_left, textvariable=self.cmd_status_var, font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
-        self.cmd_status_label.grid(row=3, column=0, columnspan=3, sticky='w', pady=(2, 0))
+        self.cmd_status_label = tk.Label(action_frame, textvariable=self.cmd_status_var, 
+                 font=('Microsoft YaHei', 9), anchor='w', fg='#27ae60')
+        self.cmd_status_label.pack(fill='x', padx=10, pady=(0, 5))
         
         self.file_path_var = tk.StringVar(value='未选择文件')
         self.transfer_status_var = tk.StringVar(value='就绪')

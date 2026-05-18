@@ -55,8 +55,30 @@ jobs:
           name: TerminalManager-server
           path: server/dist/TerminalManager-Server.exe
 
+  build-keygen:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pyinstaller
+        run: pip install pyinstaller
+      - name: Build keygen exe
+        run: |
+          cd keygen
+          pyinstaller --name "KZC-KeyGen" --onefile --windowed --clean keygen.py
+      - name: Upload keygen artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KZC-KeyGen
+          path: keygen/dist/KZC-KeyGen.exe
+
   release:
-    needs: [build-client, build-server]
+    needs: [build-client, build-server, build-keygen]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -69,6 +91,10 @@ jobs:
         with:
           name: TerminalManager-server
           path: ./release/
+      - uses: actions/download-artifact@v4
+        with:
+          name: KZC-KeyGen
+          path: ./release/
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -76,5 +102,6 @@ jobs:
           files: |
             release/TerminalManager-Client.exe
             release/TerminalManager-Server.exe
+            release/KZC-KeyGen.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

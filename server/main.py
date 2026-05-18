@@ -1261,13 +1261,6 @@ class ServerGUI:
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
         
-        # 工具栏
-        toolbar = tk.Frame(self.root, bg='#34495e', height=30)
-        toolbar.pack(fill='x')
-        toolbar.pack_propagate(False)
-        tk.Button(toolbar, text='🔑生成注册码', bg='#8e44ad', fg='white', font=('Microsoft YaHei', 9, 'bold'),
-                 command=self._gen_activation_key, cursor='hand2').pack(side='left', padx=10, pady=2)
-        
         # 统计卡片区域
         stats_frame = tk.Frame(self.root, bg='#ecf0f1')
         stats_frame.pack(fill='x', padx=5, pady=(5, 0))

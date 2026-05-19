@@ -3380,8 +3380,8 @@ class RemoteDesktopViewer:
         self.canvas.focus_set()
 
         # 用pynput监听全局键盘，直接转发按键到远程
-        self._pynput_keys = set()
-        self._pynput_listener = None
+        set()  # removed = set()
+        None  # removed = None
         self._start_keyboard_listener()
 
         # 禁用本地输入法，让按键直接发到远程（远程输入法处理中文）
@@ -4710,35 +4710,13 @@ class RemoteDesktopViewer:
 
 
     def _on_mouse_move(self, event):
-
-
-
+        """鼠标移动 - 直接TCP发送，4ms节流"""
         now = time.time()
-
-
-
-        if now - self._last_move_time < 0.03:  # 30ms节流
-
-
-
+        if now - self._last_move_time < 0.004:
             return
-
-
-
         self._last_move_time = now
-
-
-
         x, y = self._canvas_to_client(event.x, event.y)
-
-
-
         self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
-
-
-
-    
-
 
 
     def _on_canvas_resize(self, event):
@@ -4781,97 +4759,7 @@ class RemoteDesktopViewer:
 
 
 
-    def _start_keyboard_listener(self):
-        """启动pynput全局键盘监听，失败时回退到Tkinter"""
-        try:
-            from pynput import keyboard
-
-            name_map = {
-                'enter': 'enter', 'return': 'enter',
-                'backspace': 'backspace', 'tab': 'tab',
-                'space': 'space', 'delete': 'delete',
-                'left': 'left', 'right': 'right', 'up': 'up', 'down': 'down',
-                'home': 'home', 'end': 'end',
-                'page_up': 'pageup', 'page_down': 'pagedown',
-                'caps_lock': 'capslock', 'insert': 'insert',
-                'esc': 'escape', 'num_lock': 'numlock',
-            }
-
-            def on_press(key):
-                if not self.running:
-                    return False
-                try:
-                    # 只在远程桌面窗口获得焦点时才转发按键
-                    try:
-                        import ctypes
-                        hwnd = ctypes.windll.user32.GetForegroundWindow()
-                        try:
-                            current_hwnd = int(self.win.winfo_id())
-                            top_hwnd = ctypes.windll.user32.GetAncestor(current_hwnd, 2)
-                            if hwnd != top_hwnd:
-                                return
-                        except:
-                            pass  # 窗口还没ready，允许转发
-                    except:
-                        pass
-
-                    # 记录按键状态
-                    if hasattr(key, 'name') and key.name:
-                        self._pynput_keys.add(key.name)
-
-                    # 判断修饰键
-                    mods = []
-                    if any(k in self._pynput_keys for k in ('ctrl', 'ctrl_l', 'ctrl_r')):
-                        mods.append('ctrl')
-                    if any(k in self._pynput_keys for k in ('alt', 'alt_l', 'alt_r')):
-                        mods.append('alt')
-                    if any(k in self._pynput_keys for k in ('shift', 'shift_l', 'shift_r')):
-                        mods.append('shift')
-
-                    # 发送按键到远程
-                    if hasattr(key, 'char') and key.char:
-                        ch = key.char
-                        # Ctrl按住时char变成控制字符，需要转回字母
-                        if mods and ord(ch) < 32 and ord(ch) >= 1:
-                            ch = chr(ord(ch) - 1 + ord('a'))  # →'c', →'v'等
-                        if mods:
-                            self._send_input({"input_type": "key_hotkey", "keys": mods + [ch]})
-                        else:
-                            self._send_input({"input_type": "key_press", "key": ch})
-                    elif hasattr(key, 'name') and key.name:
-                        # 修饰键不单独发送，只用于组合键
-                        if key.name in ('ctrl_l', 'ctrl_r', 'alt_l', 'alt_r', 'shift_l', 'shift_r', 'cmd', 'cmd_l', 'cmd_r'):
-                            pass
-                        elif key.name.startswith('f') and key.name[1:].isdigit():
-                            self._send_input({"input_type": "key_press", "key": key.name})
-                        else:
-                            mapped = name_map.get(key.name, key.name)
-                            if mods:
-                                self._send_input({"input_type": "key_hotkey", "keys": mods + [mapped]})
-                            else:
-                                self._send_input({"input_type": "key_press", "key": mapped})
-                except:
-                    pass
-
-            def on_release(key):
-                if not self.running:
-                    return False
-                try:
-                    if hasattr(key, 'name') and key.name:
-                        self._pynput_keys.discard(key.name)
-                except:
-                    pass
-
-            self._pynput_listener = keyboard.Listener(
-                on_press=on_press,
-                on_release=on_release
-            )
-            self._pynput_listener.daemon = True
-            self._pynput_listener.start()
-        except ImportError:
-            # pynput不可用，回退到Tkinter方式
-            self.canvas.bind('<Key>', self._on_key_press_tk)
-
+    
     def _on_key_press_tk(self, event):
         """Tkinter回退键盘处理"""
         key = event.keysym
@@ -4887,7 +4775,7 @@ class RemoteDesktopViewer:
         """关闭查看器"""
         if getattr(self, '_pynput_listener', None):
             try:
-                self._pynput_listener.stop()
+                None  # removed.stop()
             except:
                 pass
 

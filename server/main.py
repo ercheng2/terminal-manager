@@ -3307,14 +3307,7 @@ class RemoteDesktopViewer:
         self.canvas = tk.Canvas(self.win, bg='#1a1a2e', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
 
-        # 隐藏Entry用于接收输入法文字
-        self._input_entry = tk.Entry(self.win, font=('Consolas', 1), width=1, 
-                                      bg='#1a1a2e', fg='#1a1a2e', bd=0,
-                                      insertbackground='#1a1a2e', highlightthickness=0)
-        self.canvas.create_window(-100, -100, window=self._input_entry, width=1, height=1)
-        self._input_entry.bind('<Return>', self._on_entry_confirm)
-        self._input_prev_text = ''
-        self._poll_entry()
+
 
         self._canvas_img_id = self.canvas.create_image(0, 0, anchor='nw')  # 预创建canvas image item
 
@@ -3382,6 +3375,15 @@ class RemoteDesktopViewer:
 
         self.canvas.bind('<Key>', self._on_key_press)
         self.canvas.focus_set()
+
+        # 禁用本地输入法，让按键直接发到远程（远程输入法处理中文）
+        try:
+            import ctypes
+            imm32 = ctypes.windll.imm32
+            hwnd = int(self.win.winfo_id())
+            imm32.ImmAssociateContext(hwnd, 0)
+        except:
+            pass
 
 
 
@@ -5061,12 +5063,7 @@ class RemoteDesktopViewer:
                    'F5': 'f5', 'F6': 'f6', 'F7': 'f7', 'F8': 'f8',
                    'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
                    'Insert': 'insert', 'Caps_Lock': 'capslock'}
-        # 可打印字符：转到隐藏Entry让输入法处理
-        if event.char and event.char.isprintable() and len(event.char) == 1:
-            self._input_entry.focus_set()
-            # 重新发送这个按键到Entry
-            self.win.after(10, lambda: self._input_entry.event_generate('<Key>', keysym=event.keysym, char=event.char))
-            return
+        # 禁用IME后所有按键直接发送到远程
         mapped_key = key_map.get(key, key)
 
 
@@ -5124,35 +5121,6 @@ class RemoteDesktopViewer:
 
 
             self._send_input({'input_type': 'key_press', 'key': mapped_key})
-
-    def _poll_entry(self):
-        """定时检查Entry内容，发现文字变化就发送到远程"""
-        if not self.running:
-            return
-        try:
-            current = self._input_entry.get()
-            if current != self._input_prev_text:
-                new_text = current[len(self._input_prev_text):]
-                self._input_prev_text = current
-                if new_text:
-                    self._send_input({"input_type": "type_text", "text": new_text})
-        except:
-            pass
-        self.win.after(100, self._poll_entry)
-
-    def _on_entry_confirm(self, event):
-        """回车确认"""
-        try:
-            current = self._input_entry.get()
-            if current:
-                self._input_entry.delete(0, tk.END)
-                self._input_prev_text = ''
-                self._send_input({"input_type": "type_text", "text": current})
-            self._send_input({"input_type": "key_press", "key": "enter"})
-            self.canvas.focus_set()
-        except:
-            pass
-        return "break"
 
     def _on_close(self):
 

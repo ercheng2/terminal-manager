@@ -5080,6 +5080,19 @@ class RemoteDesktopViewer:
                 if not self.running:
                     return False
                 try:
+                    # 只在远程桌面窗口获得焦点时才转发按键
+                    try:
+                        import ctypes
+                        hwnd = ctypes.windll.user32.GetForegroundWindow()
+                        # 检查当前前台窗口是否是远程桌面窗口
+                        current_hwnd = int(self.win.winfo_id())
+                        # winfo_id返回的是子控件句柄，需要获取顶层窗口
+                        top_hwnd = ctypes.windll.user32.GetAncestor(current_hwnd, 2)  # GA_ROOT=2
+                        if hwnd != top_hwnd:
+                            return  # 不是远程桌面窗口，不处理
+                    except:
+                        pass
+
                     # 记录按键状态
                     if hasattr(key, 'name') and key.name:
                         self._pynput_keys.add(key.name)

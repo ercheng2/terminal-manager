@@ -1276,7 +1276,7 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 
                 # 压缩为JPEG
                 buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=quality, subsampling=0)
+                img.save(buf, format='JPEG', quality=quality, subsampling=1)
                 jpeg_data = buf.getvalue()
                 
                 # 帧差分检测 - 画面没变化就返回304
@@ -1373,7 +1373,7 @@ def _stream_frames(conn):
             # JPEG编码
             jpeg_buf.seek(0)
             jpeg_buf.truncate()
-            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=1, optimize=False)
             jpeg_data = jpeg_buf.getvalue()
             
             # 发送

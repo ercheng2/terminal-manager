@@ -4107,92 +4107,41 @@ class RemoteDesktopViewer:
 
 
     def _decode_worker(self):
-
-
-
-        """独立解码线程：用Event等待帧，跳过积压帧只解码最新"""
-
-
-
+        """解码线程：JPEG解码+缩放，主线程只做显示"""
         while self.running:
-
-
-
-            self._frame_event.wait(timeout=0.02)
-
-
-
+            self._frame_event.wait(timeout=0.016)
             self._frame_event.clear()
-
-
-
             
-
-
-
             raw = self._raw_frame
-
-
-
             if raw:
-
-
-
                 self._raw_frame = None
-
-
-
-                # 如果有更新的帧，跳过当前帧
-
-
-
+                # 跳过积压帧
                 while self._raw_frame is not None:
-
-
-
                     raw = self._raw_frame
-
-
-
                     self._raw_frame = None
-
-
-
+                
                 img = self._decode_and_scale(raw)
-
-
-
                 if img:
-
-
-
-                    # 把PhotoImage创建也放后台，减少主线程负担
-
-
-
+                    self._latest_img = img
+                    # 通知主线程更新显示
                     try:
-
-
-
-                        photo = ImageTk.PhotoImage(img)
-
-
-
-                        self._latest_photo = (photo, self.offset_x, self.offset_y)
-
-
-
+                        self.win.after_idle(self._display_latest_frame)
                     except:
-
-
-
-                        self._latest_img = img
-
-
-
+                        pass
     
-
-
+    def _display_latest_frame(self):
+        """主线程：把最新帧显示到canvas"""
+        if not self.running:
+            return
+        img = self._latest_img
+        if img:
+            self._latest_img = None
+            try:
+                self.current_photo = ImageTk.PhotoImage(img)
+                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+                self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
+            except:
+                pass
 
     def _decode_and_scale(self, jpeg_data):
 
@@ -4355,112 +4304,22 @@ class RemoteDesktopViewer:
 
 
     def _poll_display(self):
-
-
-
-        """主线程轮询：1ms检查新帧，有就显示"""
-
-
-
+        """主线程轮询：检查新帧，有就显示"""
         if not self.running:
-
-
-
             return
-
-
-
         
-
-
-
-        # 优先用后台线程创建好的PhotoImage（省掉主线程转换时间）
-
-
-
-        if self._latest_photo:
-
-
-
-            photo, ox, oy = self._latest_photo
-
-
-
-            self._latest_photo = None
-
-
-
-            self.current_photo = photo
-
-
-
-            try:
-
-
-
-                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-
-
-
-                self.canvas.coords(self._canvas_img_id, ox, oy)
-
-
-
-            except Exception as e:
-
-
-
-                pass
-
-
-
-        elif self._latest_img:
-
-
-
-            img = self._latest_img
-
-
-
+        # 检查后台解码线程的结果
+        img = self._latest_img
+        if img:
             self._latest_img = None
-
-
-
             try:
-
-
-
                 self.current_photo = ImageTk.PhotoImage(img)
-
-
-
                 self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-
-
-
                 self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-
-
-
-            except Exception as e:
-
-
-
+            except:
                 pass
-
-
-
         
-
-
-
         self.win.after(1, self._poll_display)
-
-
-
-    
-
-
 
     def _show_frame(self, img):
 
@@ -4663,233 +4522,92 @@ class RemoteDesktopViewer:
 
 
     def _input_sender(self):
-
-
-
-        """输入发送线程——批量合并指令，HTTP长连接复用"""
-
-
-
-        import http.client
-
-
-
-        conn = None
-
-
-
+        """输入发送线程——TCP直连5903，零延迟，HTTP备用"""
+        import socket as _socket
+        tcp_conn = None
+        http_conn = None
+        use_tcp = True
+        tcp_fail_count = 0
+        
         while self.running:
-
-
-
             try:
-
-
-
-                # 批量取出队列中的指令
-
-
-
-                batch = []
-
-
-
-                try:
-
-
-
-                    item = self._input_queue.get(timeout=0.001)
-
-
-
-                    batch.append(item)
-
-
-
-                except queue.Empty:
-
-
-
-                    # 空闲时关闭长连接，避免占用资源
-
-
-
-                    if conn:
-
-
-
-                        try:
-
-
-
-                            conn.close()
-
-
-
-                        except:
-
-
-
-                            pass
-
-
-
-                        conn = None
-
-
-
-                    continue
-
-
-
-                
-
-
-
-                # 非阻塞取出剩余（最多10ms内积压的）
-
-
-
-                deadline = time.time() + 0.002
-
-
-
-                while not self._input_queue.empty() and len(batch) < 20 and time.time() < deadline:
-
-
-
+                # 尝试TCP连接（5903端口）
+                if use_tcp and not tcp_conn:
                     try:
-
-
-
-                        batch.append(self._input_queue.get_nowait())
-
-
-
-                    except queue.Empty:
-
-
-
-                        break
-
-
-
-                
-
-
-
-                # 去重：mouse_move/mouse_drag只保留最后一条
-
-
-
-                deduped = {}
-
-
-
-                for item in batch:
-
-
-
-                    itype = item.get('input_type', '')
-
-
-
-                    if itype in ('mouse_move', 'mouse_drag'):
-
-
-
-                        deduped[itype] = item
-
-
-
-                    else:
-
-
-
-                        deduped[f'{itype}_{len(deduped)}'] = item
-
-
-
-                
-
-
-
-                # 合并为一次HTTP请求发送（减少TCP连接开销）
-
-
-
-                items = list(deduped.values())
-
-
-
-                try:
-
-
-
-                    if not conn:
-
-
-
-                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
-
-
-
-                    data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
-
-
-
-                    conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
-
-
-
-                    resp = conn.getresponse()
-
-
-
-                    resp.read()  # 必须读完response才能复用连接
-
-
-
-                except:
-
-
-
-                    # 连接断开，重建
-
-
-
-                    try:
-
-
-
-                        conn.close()
-
-
-
+                        tcp_conn = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                        tcp_conn.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+                        tcp_conn.setsockopt(_socket.SOL_SOCKET, _socket.SO_SNDBUF, 65536)
+                        tcp_conn.connect((self.client_ip, 5903))
+                        tcp_conn.settimeout(3)
+                        tcp_fail_count = 0
                     except:
-
-
-
-                        pass
-
-
-
-                    conn = None
-
-
-
+                        try: tcp_conn.close()
+                        except: pass
+                        tcp_conn = None
+                        tcp_fail_count += 1
+                        if tcp_fail_count >= 5:
+                            use_tcp = False  # TCP不可用，切HTTP
+                        time.sleep(0.05)
+                        continue
+                
+                # 取指令
+                try:
+                    item = self._input_queue.get(timeout=0.001)
+                except queue.Empty:
+                    continue
+                
+                # 非阻塞取积压
+                batch = [item]
+                while not self._input_queue.empty() and len(batch) < 30:
+                    try:
+                        batch.append(self._input_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                
+                # 去重
+                deduped = {}
+                for it in batch:
+                    itype = it.get('input_type', '')
+                    if itype in ('mouse_move', 'mouse_drag'):
+                        deduped[itype] = it
+                    else:
+                        deduped[f'{itype}_{len(deduped)}'] = it
+                items = list(deduped.values())
+                
+                # TCP直发（每条一行JSON，不等响应）
+                if tcp_conn:
+                    try:
+                        for it in items:
+                            line = json.dumps(it) + '\n'
+                            tcp_conn.sendall(line.encode('utf-8'))
+                        tcp_fail_count = 0
+                        continue
+                    except:
+                        try: tcp_conn.close()
+                        except: pass
+                        tcp_conn = None
+                        tcp_fail_count += 1
+                        if tcp_fail_count >= 3:
+                            use_tcp = False
+                
+                # HTTP备用
+                try:
+                    if not http_conn:
+                        import http.client
+                        http_conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
+                    data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
+                    http_conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+                    resp = http_conn.getresponse()
+                    resp.read()
+                except:
+                    try: http_conn.close()
+                    except: pass
+                    http_conn = None
+                    use_tcp = True  # 重试TCP
+                    tcp_fail_count = 0
+                    
             except:
-
-
-
                 pass
-
-
-
-    
-
-
-
     def _on_mouse_press(self, event):
 
 

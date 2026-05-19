@@ -3719,7 +3719,7 @@ class RemoteDesktopViewer:
 
 
 
-                sock.settimeout(5)
+                sock.settimeout(3)
 
 
 
@@ -4118,7 +4118,7 @@ class RemoteDesktopViewer:
 
 
 
-            self._frame_event.wait(timeout=0.1)
+            self._frame_event.wait(timeout=0.02)
 
 
 
@@ -4298,7 +4298,7 @@ class RemoteDesktopViewer:
 
 
 
-                                img = img.resize((new_w, new_h), Image.BILINEAR)
+                                img = img.resize((new_w, new_h), Image.NEAREST)
 
 
 
@@ -4318,7 +4318,7 @@ class RemoteDesktopViewer:
 
 
 
-                        img = img.resize((new_w, new_h), Image.BILINEAR)
+                        img = img.resize((new_w, new_h), Image.NEAREST)
 
 
 
@@ -4454,7 +4454,7 @@ class RemoteDesktopViewer:
 
 
 
-        self.win.after(1, self._poll_display)
+        self.win.after_idle(self._poll_display)
 
 
 

@@ -3220,7 +3220,7 @@ class RemoteDesktopViewer:
 
 
 
-        self.quality_var = tk.IntVar(value=70)
+        self.quality_var = tk.IntVar(value=95)
 
 
 
@@ -4007,7 +4007,7 @@ class RemoteDesktopViewer:
 
 
 
-                url = f'http://{self.client_ip}:5901/screen?quality={quality}&scale=0.5'
+                url = f'http://{self.client_ip}:5901/screen?quality={quality}'
 
 
 
@@ -4019,10 +4019,13 @@ class RemoteDesktopViewer:
 
 
 
-                with urllib.request.urlopen(req, timeout=1) as resp:
+                with opener.open(req, timeout=1) as resp:
 
 
 
+                    if resp.status == 304:
+                        # 画面没变化，跳过
+                        continue
                     jpeg_data = resp.read()
 
 

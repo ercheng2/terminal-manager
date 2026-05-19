@@ -1094,7 +1094,10 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 70
+_screen_quality = 95
+_last_frame_data = None
+_last_frame_hash = None
+_mss_instance = None
 
 def _execute_input(input_data):
     """执行单条输入指令"""
@@ -1210,23 +1213,32 @@ class ScreenHandler(BaseHTTPRequestHandler):
                             except:
                                 scale = 1.0
                 
-                # 截屏
-                with mss.mss() as sct:
-                    monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                    screenshot = sct.grab(monitor)
-                    img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+                # 截屏（复用mss实例，避免每次创建）
+                try:
+                    sct = _mss_instance
+                except NameError:
+                    sct = mss.mss()
+                    _mss_instance = sct
+                monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                screenshot = sct.grab(monitor)
+                img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
                 
-                # 缩小分辨率（大幅减少数据量）
-                if scale < 1.0:
-                    new_w = int(img.width * scale)
-                    new_h = int(img.height * scale)
-                    if new_w > 0 and new_h > 0:
-                        img = img.resize((new_w, new_h), Image.BILINEAR)
-                
-                # 压缩为JPEG（使用fastdct加速编码）
+                # 压缩为JPEG
                 buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=quality, subsampling=2, optimize=False)
+                img.save(buf, format='JPEG', quality=quality, subsampling=0)
                 jpeg_data = buf.getvalue()
+                
+                # 帧差分检测 - 画面没变化就返回304
+                global _last_frame_data, _last_frame_hash
+                frame_hash = hash(jpeg_data)
+                if frame_hash == _last_frame_hash and _last_frame_data is not None:
+                    # 画面没变化，返回304
+                    self.send_response(304)
+                    self.send_header('Cache-Control', 'no-cache')
+                    self.end_headers()
+                    return
+                _last_frame_hash = frame_hash
+                _last_frame_data = jpeg_data
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'image/jpeg')

@@ -3137,6 +3137,10 @@ class RemoteDesktopViewer:
 
 
         self.win.title(f'远程桌面 - {client_ip}')
+        try:
+            self.win.iconbitmap('icon.ico')
+        except:
+            pass
 
 
 
@@ -5096,11 +5100,17 @@ class RemoteDesktopViewer:
                         else:
                             self._send_input({"input_type": "key_press", "key": key.char})
                     elif hasattr(key, 'name') and key.name:
-                        if key.name.startswith('f') and key.name[1:].isdigit():
-                            mapped = key.name
+                        # 修饰键不单独发送，只用于组合键
+                        if key.name in ('ctrl_l', 'ctrl_r', 'alt_l', 'alt_r', 'shift_l', 'shift_r', 'cmd', 'cmd_l', 'cmd_r'):
+                            pass
+                        elif key.name.startswith('f') and key.name[1:].isdigit():
+                            self._send_input({"input_type": "key_press", "key": key.name})
                         else:
                             mapped = name_map.get(key.name, key.name)
-                        self._send_input({"input_type": "key_press", "key": mapped})
+                            if mods:
+                                self._send_input({"input_type": "key_hotkey", "keys": mods + [mapped]})
+                            else:
+                                self._send_input({"input_type": "key_press", "key": mapped})
                 except:
                     pass
 

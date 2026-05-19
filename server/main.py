@@ -4298,7 +4298,7 @@ class RemoteDesktopViewer:
 
 
 
-                                img = img.resize((new_w, new_h), Image.NEAREST)
+                                img = img.resize((new_w, new_h), Image.BILINEAR)
 
 
 
@@ -4318,7 +4318,7 @@ class RemoteDesktopViewer:
 
 
 
-                        img = img.resize((new_w, new_h), Image.NEAREST)
+                        img = img.resize((new_w, new_h), Image.BILINEAR)
 
 
 
@@ -4698,7 +4698,7 @@ class RemoteDesktopViewer:
 
 
 
-                    item = self._input_queue.get(timeout=0.01)
+                    item = self._input_queue.get(timeout=0.005)
 
 
 
@@ -4830,7 +4830,7 @@ class RemoteDesktopViewer:
 
 
 
-                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=1)
+                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=0.5)
 
 
 

@@ -5064,7 +5064,7 @@ class RemoteDesktopViewer:
 
 
     def _start_keyboard_listener(self):
-        """启动pynput全局键盘监听"""
+        """启动pynput全局键盘监听，失败时回退到Tkinter"""
         try:
             from pynput import keyboard
 
@@ -5087,12 +5087,13 @@ class RemoteDesktopViewer:
                     try:
                         import ctypes
                         hwnd = ctypes.windll.user32.GetForegroundWindow()
-                        # 检查当前前台窗口是否是远程桌面窗口
-                        current_hwnd = int(self.win.winfo_id())
-                        # winfo_id返回的是子控件句柄，需要获取顶层窗口
-                        top_hwnd = ctypes.windll.user32.GetAncestor(current_hwnd, 2)  # GA_ROOT=2
-                        if hwnd != top_hwnd:
-                            return  # 不是远程桌面窗口，不处理
+                        try:
+                            current_hwnd = int(self.win.winfo_id())
+                            top_hwnd = ctypes.windll.user32.GetAncestor(current_hwnd, 2)
+                            if hwnd != top_hwnd:
+                                return
+                        except:
+                            pass  # 窗口还没ready，允许转发
                     except:
                         pass
 

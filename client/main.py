@@ -1719,7 +1719,7 @@ class TerminalApp:
         cmds = [('shutdown', '关机'), ('restart', '重启'), ('cancel', '取消关机'),
                 ('volume:up', '音量+'), ('volume:down', '音量-'),
                 ('mute', '静音'), ('unmute', '取消静音'),
-                ('status', '状态查询'), ('help', '帮助')]
+                ]
         ref_text.config(state='normal')
         for cmd, desc in cmds:
             ref_text.insert('end', f'  {cmd:16s} {desc}\n')

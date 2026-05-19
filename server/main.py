@@ -4877,6 +4877,7 @@ class RemoteDesktopViewer:
 
 
 
+        self.canvas.focus_set()  # 点击时获取键盘焦点
         x, y = self._canvas_to_client(event.x, event.y)
 
 
@@ -8341,23 +8342,7 @@ def main():
 
 
 
-    import webbrowser
 
-
-
-    def _open_browser():
-
-
-
-        time.sleep(2)
-
-
-
-        webbrowser.open('http://127.0.0.1:8080/cyber')
-
-
-
-    threading.Thread(target=_open_browser, daemon=True).start()
 
 
 

@@ -3220,7 +3220,7 @@ class RemoteDesktopViewer:
 
 
 
-        self.quality_var = tk.IntVar(value=95)
+        self.quality_var = tk.IntVar(value=70)
 
 
 
@@ -4007,7 +4007,7 @@ class RemoteDesktopViewer:
 
 
 
-                url = f'http://{self.client_ip}:5901/screen?quality={quality}'
+                url = f'http://{self.client_ip}:5901/screen?quality={quality}&scale=0.5'
 
 
 
@@ -4019,7 +4019,7 @@ class RemoteDesktopViewer:
 
 
 
-                with urllib.request.urlopen(req, timeout=2) as resp:
+                with urllib.request.urlopen(req, timeout=1) as resp:
 
 
 
@@ -5211,7 +5211,7 @@ class RemoteDesktopViewer:
 
 
 
-            urllib.request.urlopen(req, timeout=2)
+            urllib.request.urlopen(req, timeout=1)
 
 
 

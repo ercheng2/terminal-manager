@@ -1094,7 +1094,7 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 95
+_screen_quality = 70
 
 def _execute_input(input_data):
     """执行单条输入指令"""
@@ -1196,6 +1196,7 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 # 解析参数
                 quality = _screen_quality
                 check_hash = None
+                scale = 1.0
                 if '?' in self.path:
                     params = self.path.split('?', 1)[1]
                     for p in params.split('&'):
@@ -1203,6 +1204,11 @@ class ScreenHandler(BaseHTTPRequestHandler):
                             quality = int(p.split('=')[1])
                         if p.startswith('hash='):
                             check_hash = p.split('=')[1]
+                        if p.startswith('scale='):
+                            try:
+                                scale = float(p.split('=')[1])
+                            except:
+                                scale = 1.0
                 
                 # 截屏
                 with mss.mss() as sct:
@@ -1210,9 +1216,16 @@ class ScreenHandler(BaseHTTPRequestHandler):
                     screenshot = sct.grab(monitor)
                     img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
                 
-                # 压缩为JPEG
+                # 缩小分辨率（大幅减少数据量）
+                if scale < 1.0:
+                    new_w = int(img.width * scale)
+                    new_h = int(img.height * scale)
+                    if new_w > 0 and new_h > 0:
+                        img = img.resize((new_w, new_h), Image.BILINEAR)
+                
+                # 压缩为JPEG（使用fastdct加速编码）
                 buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=quality, subsampling=0)
+                img.save(buf, format='JPEG', quality=quality, subsampling=2, optimize=False)
                 jpeg_data = buf.getvalue()
                 
                 self.send_response(200)

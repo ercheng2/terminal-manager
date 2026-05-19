@@ -4698,7 +4698,7 @@ class RemoteDesktopViewer:
 
 
 
-                    item = self._input_queue.get(timeout=0.005)
+                    item = self._input_queue.get(timeout=0.001)
 
 
 
@@ -4750,7 +4750,7 @@ class RemoteDesktopViewer:
 
 
 
-                deadline = time.time() + 0.01
+                deadline = time.time() + 0.002
 
 
 
@@ -4830,7 +4830,7 @@ class RemoteDesktopViewer:
 
 
 
-                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=0.5)
+                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
 
 
 

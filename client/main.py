@@ -1105,37 +1105,88 @@ def _execute_input(input_data):
     pyautogui.FAILSAFE = False
     input_type = input_data.get('input_type', '')
     
+    # ctypes Win32 API（比pyautogui快10倍+）
+    import ctypes
+    user32 = ctypes.windll.user32
     if input_type == 'mouse_move':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
-        pyautogui.moveTo(x, y, _pause=False)
+        user32.SetCursorPos(x, y)
     elif input_type == 'mouse_press':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
         button = input_data.get('button', 'left')
-        pyautogui.mouseDown(x, y, button=button, _pause=False)
+        user32.SetCursorPos(x, y)
+        if button == 'left':
+            user32.mouse_event(2, 0, 0, 0, 0)
+        elif button == 'right':
+            user32.mouse_event(8, 0, 0, 0, 0)
+        elif button == 'middle':
+            user32.mouse_event(32, 0, 0, 0, 0)
     elif input_type == 'mouse_release':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
         button = input_data.get('button', 'left')
-        pyautogui.mouseUp(x, y, button=button, _pause=False)
+        user32.SetCursorPos(x, y)
+        if button == 'left':
+            user32.mouse_event(4, 0, 0, 0, 0)
+        elif button == 'right':
+            user32.mouse_event(16, 0, 0, 0, 0)
+        elif button == 'middle':
+            user32.mouse_event(64, 0, 0, 0, 0)
     elif input_type == 'mouse_click':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
         button = input_data.get('button', 'left')
         clicks = input_data.get('clicks', 1)
-        pyautogui.click(x, y, button=button, clicks=clicks, _pause=False)
+        user32.SetCursorPos(x, y)
+        for _ in range(clicks):
+            if button == 'left':
+                user32.mouse_event(2, 0, 0, 0, 0)
+                user32.mouse_event(4, 0, 0, 0, 0)
+            elif button == 'right':
+                user32.mouse_event(8, 0, 0, 0, 0)
+                user32.mouse_event(16, 0, 0, 0, 0)
     elif input_type == 'mouse_drag':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
-        pyautogui.moveTo(x, y, _pause=False)
+        user32.SetCursorPos(x, y)
     elif input_type == 'scroll':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
         delta = input_data.get('delta', 0)
-        pyautogui.scroll(delta, x, y, _pause=False)
+        user32.SetCursorPos(x, y)
+        user32.mouse_event(2048, 0, 0, int(delta), 0)
     elif input_type == 'key_press':
         key = input_data.get('key', '')
         if key:
-            pyautogui.press(key, _pause=False)
+            vk_map = {'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
+                       'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
+                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23,
+                       'pageup':0x21, 'pagedown':0x22, 'insert':0x2D,
+                       'capslock':0x14, 'numlock':0x90,
+                       'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,
+                       'f5':0x74,'f6':0x75,'f7':0x76,'f8':0x77,
+                       'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B}
+            if len(key) == 1:
+                vk = user32.VkKeyScanW(ord(key)) & 0xFF
+            else:
+                vk = vk_map.get(key.lower(), 0)
+            if vk:
+                user32.keybd_event(vk, 0, 0, 0)
+                user32.keybd_event(vk, 0, 2, 0)
     elif input_type == 'key_hotkey':
         keys = input_data.get('keys', [])
         if keys:
-            pyautogui.hotkey(*keys, _pause=False)
+            vk_map = {'ctrl':0x11, 'alt':0x12, 'shift':0x10,
+                       'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
+                       'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
+                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23}
+            vks = []
+            for k in keys:
+                if len(k) == 1:
+                    vk = user32.VkKeyScanW(ord(k)) & 0xFF
+                else:
+                    vk = vk_map.get(k.lower(), 0)
+                if vk:
+                    vks.append(vk)
+                    user32.keybd_event(vk, 0, 0, 0)
+            for vk in reversed(vks):
+                user32.keybd_event(vk, 0, 2, 0)
     elif input_type == 'type_text':
         text = input_data.get('text', '')
         if text:

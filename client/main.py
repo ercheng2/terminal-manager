@@ -1136,12 +1136,27 @@ def _execute_input(input_data):
     elif input_type == 'type_text':
         text = input_data.get('text', '')
         if text:
-            # 用剪贴板+Ctrl+V支持中文输入
-            import subprocess
+            # 用ctypes直接写剪贴板，不弹黑窗
             try:
-                subprocess.run(['clip'], input=text.encode('utf-16le'), check=True, timeout=2)
-                pyautogui.hotkey('ctrl', 'v', _pause=False)
+                import ctypes
+                from ctypes import wintypes
+                CF_UNICODETEXT = 13
+                kernel32 = ctypes.windll.kernel32
+                user32 = ctypes.windll.user32
+                # 打开剪贴板
+                if user32.OpenClipboard(0):
+                    user32.EmptyClipboard()
+                    # 分配全局内存
+                    data = text.encode('utf-16le') + b'\x00\x00'
+                    hMem = kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE|GMEM_ZEROINIT
+                    pMem = kernel32.GlobalLock(hMem)
+                    ctypes.cdll.msvcrt.memcpy(pMem, data, len(data))
+                    kernel32.GlobalUnlock(hMem)
+                    user32.SetClipboardData(CF_UNICODETEXT, hMem)
+                    user32.CloseClipboard()
+                    pyautogui.hotkey('ctrl', 'v', _pause=False)
             except Exception:
+                # 回退：逐字符输入ASCII
                 for ch in text:
                     if ord(ch) < 128:
                         pyautogui.press(ch, _pause=False)

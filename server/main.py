@@ -4695,7 +4695,7 @@ class RemoteDesktopViewer:
 
 
 
-                    item = self._input_queue.get(timeout=0.05)
+                    item = self._input_queue.get(timeout=0.02)
 
 
 
@@ -5108,10 +5108,14 @@ class RemoteDesktopViewer:
 
                     # 发送按键到远程
                     if hasattr(key, 'char') and key.char:
+                        ch = key.char
+                        # Ctrl按住时char变成控制字符，需要转回字母
+                        if mods and ord(ch) < 32 and ord(ch) >= 1:
+                            ch = chr(ord(ch) - 1 + ord('a'))  # →'c', →'v'等
                         if mods:
-                            self._send_input({"input_type": "key_hotkey", "keys": mods + [key.char]})
+                            self._send_input({"input_type": "key_hotkey", "keys": mods + [ch]})
                         else:
-                            self._send_input({"input_type": "key_press", "key": key.char})
+                            self._send_input({"input_type": "key_press", "key": ch})
                     elif hasattr(key, 'name') and key.name:
                         # 修饰键不单独发送，只用于组合键
                         if key.name in ('ctrl_l', 'ctrl_r', 'alt_l', 'alt_r', 'shift_l', 'shift_r', 'cmd', 'cmd_l', 'cmd_r'):

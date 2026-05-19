@@ -2905,10 +2905,10 @@ html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHe
 .ring{position:absolute;width:160px;height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
 .ring .n{font-size:48px;font-weight:bold;line-height:1}
 .ring .l{font-size:14px;margin-top:6px;opacity:.9}
-.rg{top:130px;left:318px;color:#00ff88;text-shadow:0 0 15px #00ff88}
-.rr{top:130px;left:878px;color:#ff4466;text-shadow:0 0 15px #ff4466}
-.rb{top:130px;left:1438px;color:#00bbff;text-shadow:0 0 15px #00bbff}
-.dl{position:absolute;left:42px;top:155px;width:480px;height:870px;overflow-y:auto}
+.rg{top:248px;left:366px;color:#00ff88;text-shadow:0 0 15px #00ff88}
+.rr{top:248px;left:889px;color:#ff4466;text-shadow:0 0 15px #ff4466}
+.rb{top:248px;left:1394px;color:#00bbff;text-shadow:0 0 15px #00bbff}
+.dl{position:absolute;left:71px;top:160px;width:460px;height:870px;overflow-y:auto}
 .dl::-webkit-scrollbar{width:4px}
 .dl::-webkit-scrollbar-thumb{background:#0066aa;border-radius:2px}
 .di{display:flex;align-items:center;padding:10px 12px;cursor:pointer;border-bottom:1px solid rgba(0,100,180,.2);transition:background .2s}
@@ -2922,7 +2922,7 @@ html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHe
 .dp{font-size:12px;color:#7aa8cc;margin-top:2px}
 .dx{width:24px;height:24px;border:1px solid #ff4466;border-radius:4px;color:#ff4466;background:transparent;cursor:pointer;font-size:14px;line-height:22px;text-align:center;flex-shrink:0}
 .dx:hover{background:#ff4466;color:#fff}
-.ia{position:absolute;left:580px;top:155px;width:1290px;height:460px}
+.ia{position:absolute;left:575px;top:160px;width:1310px;height:460px}
 .ig{display:grid;grid-template-columns:1fr 1fr;gap:8px 30px;padding:15px 20px}
 .ir{display:flex;align-items:center}
 .il{color:#00d4ff;font-size:13px;width:80px;flex-shrink:0}
@@ -2936,7 +2936,7 @@ html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHe
 .fy{background:linear-gradient(90deg,#ccaa00,#ffdd00)}
 .fr{background:linear-gradient(90deg,#cc3333,#ff4466)}
 .nd{color:#556;font-size:14px;text-align:center;padding-top:40px}
-.ca{position:absolute;left:580px;top:648px;width:590px;height:370px}
+.ca{position:absolute;left:575px;top:640px;width:600px;height:400px}
 .cg{display:flex;flex-direction:column;gap:12px;padding:20px}
 .cr{display:flex;gap:12px}
 .cb{flex:1;padding:12px 8px;background:transparent;border:1px solid #00d4ff;color:#e0e0e0;font-size:14px;font-family:"Microsoft YaHei",sans-serif;cursor:pointer;border-radius:4px;transition:all .2s}
@@ -2948,7 +2948,7 @@ html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHe
 .cb.gn{border-color:#00ff88;color:#00ff88}
 .cb.gn:hover{background:rgba(0,255,136,.15);box-shadow:0 0 12px rgba(0,255,136,.4)}
 .cb.w3{flex:3}
-.fa{position:absolute;left:1195px;top:648px;width:680px;height:370px}
+.fa{position:absolute;left:1195px;top:640px;width:685px;height:400px}
 .fc{padding:20px}
 .fw{display:flex;gap:10px;align-items:center;margin-bottom:15px}
 .fi{flex:1;padding:8px 12px;background:rgba(0,20,50,.6);border:1px solid rgba(0,100,180,.3);color:#e0e0e0;font-size:13px;border-radius:4px}
@@ -3377,9 +3377,7 @@ class RemoteDesktopViewer:
 
 
         self.canvas.bind('<Key>', self._on_key_press)
-
-
-
+        self.canvas.bind('<Button-1>', lambda e: self.canvas.focus_set())
         self.canvas.focus_set()
 
 

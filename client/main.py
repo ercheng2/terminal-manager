@@ -1136,7 +1136,15 @@ def _execute_input(input_data):
     elif input_type == 'type_text':
         text = input_data.get('text', '')
         if text:
-            pyautogui.typewrite(text, _pause=False)
+            # 用剪贴板+Ctrl+V支持中文输入
+            import subprocess
+            try:
+                subprocess.run(['clip'], input=text.encode('utf-16le'), check=True, timeout=2)
+                pyautogui.hotkey('ctrl', 'v', _pause=False)
+            except Exception:
+                for ch in text:
+                    if ord(ch) < 128:
+                        pyautogui.press(ch, _pause=False)
     elif input_type == 'set_quality':
         global _screen_quality
         _screen_quality = input_data.get('quality', 50)

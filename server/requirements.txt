@@ -4,3 +4,4 @@ websockets
 Pillow
 pystray
 windnd
+pynput

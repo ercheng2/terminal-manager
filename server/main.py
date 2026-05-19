@@ -3373,8 +3373,12 @@ class RemoteDesktopViewer:
 
 
 
-        self.canvas.bind('<Key>', self._on_key_press)
         self.canvas.focus_set()
+
+        # 用pynput监听全局键盘，直接转发按键到远程
+        self._pynput_keys = set()
+        self._pynput_listener = None
+        self._start_keyboard_listener()
 
         # 禁用本地输入法，让按键直接发到远程（远程输入法处理中文）
         try:
@@ -5052,81 +5056,91 @@ class RemoteDesktopViewer:
 
 
 
-    def _on_key_press(self, event):
-        # 按键映射 - 只处理功能键和特殊键
+    def _start_keyboard_listener(self):
+        """启动pynput全局键盘监听"""
+        try:
+            from pynput import keyboard
+
+            name_map = {
+                'enter': 'enter', 'return': 'enter',
+                'backspace': 'backspace', 'tab': 'tab',
+                'space': 'space', 'delete': 'delete',
+                'left': 'left', 'right': 'right', 'up': 'up', 'down': 'down',
+                'home': 'home', 'end': 'end',
+                'page_up': 'pageup', 'page_down': 'pagedown',
+                'caps_lock': 'capslock', 'insert': 'insert',
+                'esc': 'escape', 'num_lock': 'numlock',
+            }
+
+            def on_press(key):
+                if not self.running:
+                    return False
+                try:
+                    # 记录按键状态
+                    if hasattr(key, 'name') and key.name:
+                        self._pynput_keys.add(key.name)
+
+                    # 判断修饰键
+                    mods = []
+                    if any(k in self._pynput_keys for k in ('ctrl', 'ctrl_l', 'ctrl_r')):
+                        mods.append('ctrl')
+                    if any(k in self._pynput_keys for k in ('alt', 'alt_l', 'alt_r')):
+                        mods.append('alt')
+                    if any(k in self._pynput_keys for k in ('shift', 'shift_l', 'shift_r')):
+                        mods.append('shift')
+
+                    # 发送按键到远程
+                    if hasattr(key, 'char') and key.char:
+                        if mods:
+                            self._send_input({"input_type": "key_hotkey", "keys": mods + [key.char]})
+                        else:
+                            self._send_input({"input_type": "key_press", "key": key.char})
+                    elif hasattr(key, 'name') and key.name:
+                        if key.name.startswith('f') and key.name[1:].isdigit():
+                            mapped = key.name
+                        else:
+                            mapped = name_map.get(key.name, key.name)
+                        self._send_input({"input_type": "key_press", "key": mapped})
+                except:
+                    pass
+
+            def on_release(key):
+                if not self.running:
+                    return False
+                try:
+                    if hasattr(key, 'name') and key.name:
+                        self._pynput_keys.discard(key.name)
+                except:
+                    pass
+
+            self._pynput_listener = keyboard.Listener(
+                on_press=on_press,
+                on_release=on_release
+            )
+            self._pynput_listener.daemon = True
+            self._pynput_listener.start()
+        except ImportError:
+            # pynput不可用，回退到Tkinter方式
+            self.canvas.bind('<Key>', self._on_key_press_tk)
+
+    def _on_key_press_tk(self, event):
+        """Tkinter回退键盘处理"""
         key = event.keysym
         key_map = {'Return': 'enter', 'BackSpace': 'backspace', 'Escape': 'escape',
                    'Tab': 'tab', 'space': 'space', 'Delete': 'delete',
-                   'Left': 'left', 'Right': 'right', 'Up': 'up', 'Down': 'down',
-                   'Home': 'home', 'End': 'end', 'Prior': 'pageup', 'Next': 'pagedown',
-                   'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4',
-                   'F5': 'f5', 'F6': 'f6', 'F7': 'f7', 'F8': 'f8',
-                   'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
-                   'Insert': 'insert', 'Caps_Lock': 'capslock'}
-        # 禁用IME后所有按键直接发送到远程
-        mapped_key = key_map.get(key, key)
-
-
-
-        
-
-
-
-        # 处理组合键
-
-
-
-        modifiers = []
-
-
-
-        if event.state & 0x1:  # Shift
-
-
-
-            modifiers.append('shift')
-
-
-
-        if event.state & 0x4:  # Ctrl
-
-
-
-            modifiers.append('ctrl')
-
-
-
-        if event.state & 0x8:  # Alt
-
-
-
-            modifiers.append('alt')
-
-
-
-        
-
-
-
-        if modifiers and len(mapped_key) == 1:
-
-
-
-            self._send_input({'input_type': 'key_hotkey', 'keys': modifiers + [mapped_key]})
-
-
-
-        else:
-
-
-
-            self._send_input({'input_type': 'key_press', 'key': mapped_key})
-
+                   'Left': 'left', 'Right': 'right', 'Up': 'up', 'Down': 'down'}
+        mapped_key = key_map.get(key, key.lower() if len(key) > 1 else key)
+        self._send_input({"input_type": "key_press", "key": mapped_key})
     def _on_close(self):
 
 
 
         """关闭查看器"""
+        if getattr(self, '_pynput_listener', None):
+            try:
+                self._pynput_listener.stop()
+            except:
+                pass
 
 
 

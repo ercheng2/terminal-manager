@@ -1297,10 +1297,8 @@ def _stream_frames(conn):
     sct = mss.mss()
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
     
-    prev_raw_hash = None
     last_send_time = time.time()
     target_interval = 1.0 / 60  # 目标60fps
-    no_change_count = 0
     try:
         import numpy as np
         use_numpy = True
@@ -1314,27 +1312,9 @@ def _stream_frames(conn):
         while True:
             screenshot = sct.grab(monitor)
             
-            # 帧差分检测（用raw数据的hash，比编码后比较快得多）
-            raw_data = screenshot.bgra
-            raw_hash = hash(raw_data)
-            if raw_hash == prev_raw_hash:
-                no_change_count += 1
-                if no_change_count > 3:
-                    # 画面没变化，只发一个0长度帧通知
-                    conn.sendall(struct.pack('!I', 0))
-                    now = time.time()
-                    elapsed = now - last_send_time
-                    last_send_time = now
-                    if elapsed < 0.1:  # 静止时降到10fps轮询
-                        time.sleep(0.1 - elapsed)
-                    continue
-            else:
-                prev_raw_hash = raw_hash
-                no_change_count = 0
-            
             # BGRA→RGB转换（numpy比PIL快30%）
             if use_numpy:
-                arr = np.frombuffer(raw_data, dtype=np.uint8).reshape(screenshot.size[1], screenshot.size[0], 4)
+                arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(screenshot.size[1], screenshot.size[0], 4)
                 img = Image.fromarray(arr[:, :, :3], 'RGB')
             else:
                 img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')

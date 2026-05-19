@@ -4454,7 +4454,7 @@ class RemoteDesktopViewer:
 
 
 
-        self.win.after_idle(self._poll_display)
+        self.win.after(1, self._poll_display)
 
 
 

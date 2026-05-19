@@ -4695,7 +4695,7 @@ class RemoteDesktopViewer:
 
 
 
-                    item = self._input_queue.get(timeout=0.02)
+                    item = self._input_queue.get(timeout=0.01)
 
 
 

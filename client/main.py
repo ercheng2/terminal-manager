@@ -1702,6 +1702,13 @@ class TerminalApp:
             ref_text.insert('end', f'  {cmd:16s} {desc}\n')
         ref_text.config(state='disabled')
 
+        # 本机信息
+        info_frame = tk.LabelFrame(left_frame, text=' 本机信息 ', font=('Microsoft YaHei', 10, 'bold'))
+        info_frame.pack(fill='both', pady=(5, 0))
+        self._local_info_text = tk.Text(info_frame, height=6, width=30, font=('Consolas', 9), state='disabled', bg='#fafafa')
+        self._local_info_text.pack(fill='both', expand=True, padx=5, pady=5)
+        self._update_local_info()
+
         # --- 右侧 ---
         right_frame = tk.Frame(main_frame)
         right_frame.pack(side='right', fill='both', expand=True, padx=(4, 0))
@@ -1919,6 +1926,54 @@ class TerminalApp:
             self._show_msg('已取消关机')
         else:
             self._show_msg('没有正在进行的关机任务')
+
+    # ==================== 本机信息 ====================
+    def _update_local_info(self):
+        """获取并显示本机IP和主要信息"""
+        import socket
+        import platform
+        info_lines = []
+        # 主机名
+        hostname = socket.gethostname()
+        info_lines.append(f'  主机名: {hostname}')
+        # 本机IP（所有网卡）
+        try:
+            addrs = socket.getaddrinfo(hostname, None)
+            ips = set()
+            for addr in addrs:
+                ip = addr[4][0]
+                if ip != '127.0.0.1' and ':' not in ip:
+                    ips.add(ip)
+            if ips:
+                info_lines.append(f'  IP地址: {", ".join(sorted(ips))}')
+            else:
+                info_lines.append('  IP地址: 未获取')
+        except:
+            info_lines.append('  IP地址: 未获取')
+        # 操作系统
+        info_lines.append(f'  系统: {platform.system()} {platform.release()}')
+        # 系统版本
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            mem_gb = mem.total / (1024**3)
+            mem_used = mem.used / (1024**3)
+            info_lines.append(f'  内存: {mem_used:.1f}/{mem_gb:.1f}GB')
+            disk = psutil.disk_usage('/')
+            disk_gb = disk.total / (1024**3)
+            disk_used = disk.used / (1024**3)
+            info_lines.append(f'  磁盘: {disk_used:.1f}/{disk_gb:.1f}GB')
+        except:
+            info_lines.append(f'  版本: {platform.version()}')
+        # 更新显示
+        self._local_info_text.config(state='normal')
+        self._local_info_text.delete('1.0', 'end')
+        for line in info_lines:
+            self._local_info_text.insert('end', line + '\n')
+        self._local_info_text.config(state='disabled')
+        # 每30秒刷新一次
+        if hasattr(self, 'root') and self.root:
+            self.root.after(30000, self._update_local_info)
 
     # ==================== 操作反馈 ====================
     def _show_msg(self, msg):

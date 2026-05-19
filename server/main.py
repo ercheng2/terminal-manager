@@ -87,8 +87,17 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title='坤展成终端管理系统')
 
-# 挂载静态文件目录
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# 挂载静态文件目录（兼容PyInstaller打包）
+_static_dir = resource_path('static')
+if not os.path.isdir(_static_dir):
+    # 运行目录下也没有，尝试当前工作目录
+    _static_dir = os.path.join(os.path.abspath('.'), 'static')
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+else:
+    # 创建空static目录避免启动报错
+    os.makedirs(_static_dir, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 # 内存中的数据
 _clients = {}  # client_id -> client_info

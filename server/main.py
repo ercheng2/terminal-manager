@@ -3305,10 +3305,17 @@ class RemoteDesktopViewer:
 
 
         self.canvas = tk.Canvas(self.win, bg='#1a1a2e', highlightthickness=0)
-
-
-
         self.canvas.pack(fill='both', expand=True)
+
+        # 隐藏Entry用于接收输入法文字
+        self._input_entry = tk.Entry(self.win, font=('Consolas', 1), width=1, 
+                                      bg='#1a1a2e', fg='#1a1a2e', bd=0,
+                                      insertbackground='#1a1a2e', highlightthickness=0)
+        self.canvas.create_window(-100, -100, window=self._input_entry, width=1, height=1)
+        self._input_entry.bind('<Return>', self._on_entry_input)
+        self._input_entry.bind('<FocusOut>', self._on_entry_focus_out)
+        self._input_entry_var = ''
+        self._input_entry.bind('<Key>', self._on_entry_key)
 
 
 
@@ -5047,17 +5054,21 @@ class RemoteDesktopViewer:
 
 
     def _on_key_press(self, event):
-        # 处理可打印字符（包括中文）
-        if event.char and len(event.char) == 1 and event.char.isprintable():
-            self._send_input({'input_type': 'type_text', 'text': event.char})
-            return
-
-        # 按键映射
+        # 按键映射 - 只处理功能键和特殊键
         key = event.keysym
         key_map = {'Return': 'enter', 'BackSpace': 'backspace', 'Escape': 'escape',
                    'Tab': 'tab', 'space': 'space', 'Delete': 'delete',
                    'Left': 'left', 'Right': 'right', 'Up': 'up', 'Down': 'down',
-                   'Home': 'home', 'End': 'end', 'Prior': 'pageup', 'Next': 'pagedown'}
+                   'Home': 'home', 'End': 'end', 'Prior': 'pageup', 'Next': 'pagedown',
+                   'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4',
+                   'F5': 'f5', 'F6': 'f6', 'F7': 'f7', 'F8': 'f8',
+                   'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
+                   'Insert': 'insert', 'Caps_Lock': 'capslock'}
+        # 可打印字符交给隐藏Entry处理（支持输入法）
+        if event.char and event.char.isprintable() and len(event.char) == 1:
+            # 将焦点转到隐藏Entry，让输入法工作
+            self._input_entry.focus_set()
+            return  # 不处理，交给Entry
         mapped_key = key_map.get(key, key)
 
 
@@ -5116,11 +5127,40 @@ class RemoteDesktopViewer:
 
             self._send_input({'input_type': 'key_press', 'key': mapped_key})
 
+    def _on_entry_key(self, event):
+        """输入法确认后发送文字到远程"""
+        try:
+            current = self._input_entry.get()
+            if current and len(current) > 0:
+                self._input_entry.delete(0, tk.END)
+                self._send_input({"input_type": "type_text", "text": current})
+                self.canvas.focus_set()
+        except:
+            pass
+        return "break"
 
+    def _on_entry_input(self, event):
+        """回车确认输入"""
+        try:
+            current = self._input_entry.get()
+            if current:
+                self._input_entry.delete(0, tk.END)
+                self._send_input({"input_type": "type_text", "text": current})
+            self._send_input({"input_type": "key_press", "key": "enter"})
+            self.canvas.focus_set()
+        except:
+            pass
+        return "break"
 
-    
-
-
+    def _on_entry_focus_out(self, event):
+        """焦点丢失时发送未确认文字"""
+        try:
+            current = self._input_entry.get()
+            if current:
+                self._input_entry.delete(0, tk.END)
+                self._send_input({"input_type": "type_text", "text": current})
+        except:
+            pass
 
     def _on_close(self):
 

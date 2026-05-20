@@ -1309,52 +1309,145 @@ class ScreenHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def _stream_frames(conn):
-    """TCP流推送——极速版，全分辨率，后台编码"""
+    """TCP流推送——优化版：帧率控制+增量编码+心跳，大幅降低CPU和网络占用"""
     import mss
     import socket
     import zlib
+    import struct
+    
+    # 帧协议格式: type(1B) + x(4B) + y(4B) + w(4B) + h(4B) + jpeg_len(4B) = 21字节帧头
+    FRAME_HEADER_FMT = '!BIIIII'
+    FRAME_TYPE_FULL = 0       # 全帧
+    FRAME_TYPE_INCREMENTAL = 1 # 增量帧
+    FRAME_TYPE_HEARTBEAT = 2   # 心跳（无数据）
+    
     sct = mss.mss()
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
     
-    prev_hash = None
     last_send_time = time.time()
-    target_interval = 1.0 / 60  # 目标60fps
+    target_fps = 15  # 目标帧率15fps，平衡流畅度和资源
+    target_interval = 1.0 / target_fps
+    
+    # 帧差异检测
     use_numpy = False
+    prev_arr = None
     try:
         import numpy as np
         use_numpy = True
     except ImportError:
         pass
     
-    # 预分配JPEG缓冲区
+    # 预分配缓冲区
     jpeg_buf = io.BytesIO()
+    full_jpeg_buf = io.BytesIO()
+    
+    # 心跳计数器（每10个心跳周期强制发全帧保持同步）
+    heartbeat_count = 0
+    heartbeat_interval = 10  # 10个心跳周期约3秒发一次全帧
+    force_full_frame = True  # 首次连接强制发全帧
+    
+    def encode_frame(frame_type, x, y, w, h, jpeg_data):
+        """编码帧数据"""
+        header = struct.pack(FRAME_HEADER_FMT, frame_type, x, y, w, h, len(jpeg_data))
+        return header + jpeg_data
+    
+    def send_full_frame(img):
+        """发送全帧"""
+        full_jpeg_buf.seek(0)
+        full_jpeg_buf.truncate()
+        img.save(full_jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+        jpeg_data = full_jpeg_buf.getvalue()
+        conn.sendall(encode_frame(FRAME_TYPE_FULL, 0, 0, img.width, img.height, jpeg_data))
+        return jpeg_data
+    
+    def detect_changed_region(prev_arr, curr_arr, threshold=10):
+        """检测两帧之间的变化区域，返回变化区域坐标或None"""
+        if prev_arr is None:
+            return None
+        
+        diff = np.abs(prev_arr.astype(int) - curr_arr.astype(int))
+        changed = np.any(diff > threshold, axis=2)
+        
+        if not np.any(changed):
+            return None
+        
+        rows = np.any(changed, axis=1)
+        cols = np.any(changed, axis=0)
+        
+        rmin = np.where(rows)[0][0]
+        rmax = np.where(rows)[0][-1]
+        cmin = np.where(cols)[0][0]
+        cmax = np.where(cols)[0][-1]
+        
+        # 扩展边界8像素，添加上下文
+        pad = 8
+        rmin = max(0, rmin - pad)
+        rmax = min(curr_arr.shape[0], rmax + pad + 1)
+        cmin = max(0, cmin - pad)
+        cmax = min(curr_arr.shape[1], cmax + pad + 1)
+        
+        return (cmin, rmin, cmax - cmin, rmax - rmin)
+    
+    def send_incremental_frame(img, region):
+        """发送增量帧"""
+        x, y, w, h = region
+        # 裁剪变化区域
+        cropped = img.crop((x, y, x + w, y + h))
+        
+        jpeg_buf.seek(0)
+        jpeg_buf.truncate()
+        cropped.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+        jpeg_data = jpeg_buf.getvalue()
+        
+        conn.sendall(encode_frame(FRAME_TYPE_INCREMENTAL, x, y, w, h, jpeg_data))
+    
+    def send_heartbeat():
+        """发送心跳"""
+        conn.sendall(encode_frame(FRAME_TYPE_HEARTBEAT, 0, 0, 0, 0, b''))
     
     try:
         while True:
+            loop_start = time.time()
+            
+            # 截屏
             screenshot = sct.grab(monitor)
             
-            # BGRA→RGB转换（numpy比PIL快30%）
+            # BGRA→RGB转换
             if use_numpy:
-                arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(screenshot.size[1], screenshot.size[0], 4)
-                img = Image.fromarray(arr[:, :, :3], 'RGB')
+                arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
+                    screenshot.size[1], screenshot.size[0], 4)[:, :, :3]
             else:
                 img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+                arr = np.array(img)
             
-            # JPEG编码（使用_screen_quality变量，默认95最高画质）
-            jpeg_buf.seek(0)
-            jpeg_buf.truncate()
-            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
-            jpeg_data = jpeg_buf.getvalue()
+            # 强制发全帧（首次或周期性）
+            if force_full_frame or heartbeat_count >= heartbeat_interval:
+                img = Image.fromarray(arr, 'RGB')
+                send_full_frame(img)
+                force_full_frame = False
+                heartbeat_count = 0
+                prev_arr = arr.copy()
+            else:
+                # 检测变化
+                region = detect_changed_region(prev_arr, arr)
+                
+                if region is None:
+                    # 无变化，发送心跳
+                    send_heartbeat()
+                    heartbeat_count += 1
+                else:
+                    # 有变化，发送增量帧
+                    img = Image.fromarray(arr, 'RGB')
+                    send_incremental_frame(img, region)
+                    prev_arr = arr.copy()
+                    heartbeat_count = 0
             
-            # 发送
-            conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
-            
-            # 自适应帧率：处理快就多发，不固定sleep
-            now = time.time()
-            elapsed = now - last_send_time
-            last_send_time = now
-            if elapsed < target_interval:
-                time.sleep(target_interval - elapsed)
+            # 帧率控制
+            elapsed = time.time() - loop_start
+            sleep_time = target_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+                
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     except Exception as e:

@@ -3464,6 +3464,11 @@ class RemoteDesktopViewer:
 
 
         self._raw_frame = None  # 收到的JPEG原始数据（收帧线程写入，解码线程读取）
+        self._frame_header_size = 21  # 帧头大小: B+5I = 21字节
+        self._frame_header_fmt = '!BIIIII'  # 帧头格式
+        self._frame_type_heartbeat = 2  # 心跳帧类型
+        self._base_image = None  # 增量帧基础图像
+        self._current_screen_img = None  # 当前完整屏幕图像（增量更新用）
 
 
 
@@ -3588,100 +3593,19 @@ class RemoteDesktopViewer:
 
 
     def _fetch_loop(self):
-
-
-
         """帧获取——优先TCP流5902，失败自动回退HTTP 5901"""
-
-
-
-        import socket
-
-
-
-        
-
-
-
         self._get_screen_info()
-
-
-
         self._notify_quality()
-
-
-
         
-
-
-
         while self.running:
-
-
-
-            # 先试TCP流模式
-
-
-
             try:
-
-
-
-                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-
-
-                test_sock.settimeout(2)
-
-
-
-                test_sock.connect((self.client_ip, 5902))
-
-
-
-                test_sock.close()
-
-
-
-                # TCP可用，用流模式
-
-
-
                 self._fetch_via_tcp()
-
-
-
-                return  # _fetch_via_tcp退出后不再重试
-
-
-
+                return
             except:
-
-
-
                 pass
-
-
-
             
-
-
-
-            # TCP不可用，用HTTP模式
-
-
-
             self._fetch_via_http()
-
-
-
             return
-
-
-
-    
-
-
 
     def _fetch_via_tcp(self):
 
@@ -3730,209 +3654,74 @@ class RemoteDesktopViewer:
                 sock.settimeout(3)
 
 
+                sock.settimeout(3)
 
                 self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
 
-
-
                 
-
-
-
+                # 重置增量帧状态
+                self._base_image = None
+                
                 while self.running:
-
-
-
+                    # 接收帧头（21字节）
                     header = b''
-
-
-
-                    while len(header) < 4 and self.running:
-
-
-
+                    while len(header) < self._frame_header_size and self.running:
                         try:
-
-
-
-                            chunk = sock.recv(4 - len(header))
-
-
-
+                            chunk = sock.recv(self._frame_header_size - len(header))
                             if not chunk:
-
-
-
                                 raise ConnectionError()
-
-
-
                             header += chunk
-
-
-
                         except socket.timeout:
-
-
-
                             continue
-
-
-
                     
-
-
-
                     if not self.running:
-
-
-
                         break
-
-
-
-                    if len(header) < 4:
-
-
-
-                        raise ConnectionError("Incomplete header")
-
-
-
+                    if len(header) < self._frame_header_size:
+                        raise ConnectionError("Incomplete frame header")
                     
-
-
-
-                    frame_len = struct.unpack('!I', header)[0]
-
-
-
-                    if frame_len == 0:
-
-
-
+                    # 解析帧头
+                    frame_type, x, y, w, h, jpeg_len = struct.unpack(
+                        self._frame_header_fmt, header)
+                    
+                    # 心跳帧：无数据
+                    if frame_type == self._frame_type_heartbeat:
+                        self.frame_count += 1  # 心跳也计入帧数
                         continue
-
-
-
-                    if frame_len > 10 * 1024 * 1024:
-
-
-
+                    
+                    if jpeg_len == 0:
+                        continue
+                    
+                    if jpeg_len > 10 * 1024 * 1024:
                         raise ValueError("Frame too large")
-
-
-
                     
-
-
-
+                    # 接收JPEG数据
                     frame_data = bytearray()
-
-
-
-                    while len(frame_data) < frame_len and self.running:
-
-
-
+                    while len(frame_data) < jpeg_len and self.running:
                         try:
-
-
-
-                            chunk = sock.recv(min(frame_len - len(frame_data), 262144))
-
-
-
+                            chunk = sock.recv(min(jpeg_len - len(frame_data), 262144))
                             if not chunk:
-
-
-
                                 raise ConnectionError()
-
-
-
                             frame_data.extend(chunk)
-
-
-
                         except socket.timeout:
-
-
-
                             continue
-
-
-
                     frame_data = bytes(frame_data)
-
-
-
                     
-
-
-
                     if not self.running:
-
-
-
                         break
-
-
-
-                    if len(frame_data) < frame_len:
-
-
-
+                    if len(frame_data) < jpeg_len:
                         raise ConnectionError("Incomplete frame")
-
-
-
                     
-
-
-
                     self.frame_count += 1
-
-
-
                     now = time.time()
-
-
-
                     if now - self.fps_timer >= 1.0:
-
-
-
                         fps = self.frame_count / (now - self.fps_timer)
-
-
-
                         self.win.after(0, lambda f=fps: self.fps_var.set(f'FPS: {f:.1f}'))
-
-
-
                         self.frame_count = 0
-
-
-
                         self.fps_timer = now
-
-
-
                     
-
-
-
-                    # 收到帧数据，存入解码队列（不阻塞收帧）
-
-
-
-                    self._raw_frame = frame_data
-
-
-
+                    # 收到帧数据，存入解码队列（包含帧类型和位置信息）
+                    self._raw_frame = (frame_type, x, y, w, h, frame_data)
                     self._frame_event.set()
-
 
 
                 
@@ -4104,360 +3893,130 @@ class RemoteDesktopViewer:
 
 
     def _decode_worker(self):
-
-
-
-        """独立解码线程：用Event等待帧，跳过积压帧只解码最新"""
-
-
-
+        """独立解码线程：用Event等待帧，支持增量更新"""
         while self.running:
-
-
-
             self._frame_event.wait(timeout=0.1)
-
-
-
             self._frame_event.clear()
-
-
-
-            
-
-
-
             raw = self._raw_frame
-
-
-
             if raw:
-
-
-
                 self._raw_frame = None
-
-
-
-                # 如果有更新的帧，跳过当前帧
-
-
-
+                # 跳过积压帧，只解码最新
                 while self._raw_frame is not None:
-
-
-
                     raw = self._raw_frame
-
-
-
                     self._raw_frame = None
-
-
-
-                img = self._decode_and_scale(raw)
-
-
-
+                
+                # 解析帧数据
+                if isinstance(raw, tuple) and len(raw) == 6:
+                    frame_type, x, y, fw, fh, jpeg_data = raw
+                    img = self._decode_and_apply(frame_type, x, y, fw, fh, jpeg_data)
+                else:
+                    # 兼容旧HTTP格式
+                    img = self._decode_and_apply(0, 0, 0, 0, 0, raw)
+                
                 if img:
+                    self._latest_img = img
 
-
-
-                    # 把PhotoImage创建也放后台，减少主线程负担
-
-
-
-                    try:
-
-
-
-                        photo = ImageTk.PhotoImage(img)
-
-
-
-                        self._latest_photo = (photo, self.offset_x, self.offset_y)
-
-
-
-                    except:
-
-
-
-                        self._latest_img = img
-
-
-
-    
-
-
-
-    def _decode_and_scale(self, jpeg_data):
-
-
-
-        """后台线程：JPEG解码+缩放（draft降采样+resize补齐）"""
-
-
-
+    def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):
+        """解码并应用帧 - 支持增量更新"""
         try:
-
-
-
-            img = Image.open(io.BytesIO(jpeg_data))
-
-
-
-            iw, ih = img.size  # 原始尺寸
-
-
-
+            region = Image.open(io.BytesIO(jpeg_data))
+            region.load()
+            
+            if frame_type == 0:
+                # 全帧
+                self._current_screen_img = region
+            elif frame_type == 1:
+                # 增量更新
+                if self._current_screen_img is None:
+                    self._current_screen_img = region
+                else:
+                    self._current_screen_img.paste(region, (x, y))
+            
+            # 在副本上做缩放（不修改原图）
+            display_img = self._current_screen_img
+            iw, ih = display_img.size
             cw, ch = self._canvas_size
-
-
-
             
-
-
-
             if cw > 100 and ch > 100:
-
-
-
                 self.screen_scale = min(cw / iw, ch / ih)
-
-
-
                 new_w = int(iw * self.screen_scale)
-
-
-
                 new_h = int(ih * self.screen_scale)
-
-
-
                 
-
-
-
-                need_scale = abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02
-
-
-
+                if abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02:
+                    display_img = display_img.resize((new_w, new_h), Image.BILINEAR)
                 
-
-
-
-                if need_scale:
-
-
-
-                    # 尝试draft（JPEG解码阶段降采样，快5-8倍，但只支持2的幂次缩小）
-
-
-
-                    drafted = False
-
-
-
-                    try:
-
-
-
-                        img.draft('RGB', (new_w, new_h))
-
-
-
-                        img.load()
-
-
-
-                        dw, dh = img.size
-
-
-
-                        # draft成功且尺寸确实变小了
-
-
-
-                        if dw < iw or dh < ih:
-
-
-
-                            drafted = True
-
-
-
-                            # draft后可能还需微调（draft只做2x/4x缩小）
-
-
-
-                            if abs(dw - new_w) > 2 or abs(dh - new_h) > 2:
-
-
-
-                                img = img.resize((new_w, new_h), Image.BILINEAR)
-
-
-
-                    except:
-
-
-
-                        pass
-
-
-
-                    
-
-
-
-                    if not drafted:
-
-
-
-                        img = img.resize((new_w, new_h), Image.BILINEAR)
-
-
-
-                
-
-
-
                 self.offset_x = (cw - new_w) // 2
-
-
-
                 self.offset_y = (ch - new_h) // 2
-
-
-
+            else:
+                self.offset_x = 0
+                self.offset_y = 0
             
-
-
-
-            return img
-
-
-
+            return display_img
         except:
-
-
-
             return None
 
 
+    def _decode_jpeg(self, jpeg_data):
+        """解码JPEG数据（不解缩放，缩放在显示时处理）"""
+        try:
+            img = Image.open(io.BytesIO(jpeg_data))
+            return img
+        except:
+            return None
 
-    
-
-
+    def _decode_and_scale(self, jpeg_data):
+        """解码JPEG+缩放（保留兼容性）"""
+        try:
+            img = Image.open(io.BytesIO(jpeg_data))
+            iw, ih = img.size  # 原始尺寸
+            cw, ch = self._canvas_size
+            
+            if cw > 100 and ch > 100:
+                self.screen_scale = min(cw / iw, ch / ih)
+                new_w = int(iw * self.screen_scale)
+                new_h = int(ih * self.screen_scale)
+                
+                need_scale = abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02
+                
+                if need_scale:
+                    drafted = False
+                    try:
+                        img.draft('RGB', (new_w, new_h))
+                        img.load()
+                        dw, dh = img.size
+                        if dw < iw or dh < ih:
+                            drafted = True
+                            if abs(dw - new_w) > 2 or abs(dh - new_h) > 2:
+                                img = img.resize((new_w, new_h), Image.BILINEAR)
+                    except:
+                        pass
+                    
+                    if not drafted:
+                        img = img.resize((new_w, new_h), Image.BILINEAR)
+                
+                self.offset_x = (cw - new_w) // 2
+                self.offset_y = (ch - new_h) // 2
+            
+            return img
+        except:
+            return None
 
     def _poll_display(self):
-
-
-
         """主线程轮询：1ms检查新帧，有就显示"""
-
-
-
         if not self.running:
-
-
-
             return
-
-
-
         
-
-
-
-        # 优先用后台线程创建好的PhotoImage（省掉主线程转换时间）
-
-
-
-        if self._latest_photo:
-
-
-
-            photo, ox, oy = self._latest_photo
-
-
-
-            self._latest_photo = None
-
-
-
-            self.current_photo = photo
-
-
-
-            try:
-
-
-
-                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-
-
-
-                self.canvas.coords(self._canvas_img_id, ox, oy)
-
-
-
-            except Exception as e:
-
-
-
-                pass
-
-
-
-        elif self._latest_img:
-
-
-
+        if self._latest_img is not None:
             img = self._latest_img
-
-
-
             self._latest_img = None
-
-
-
             try:
-
-
-
                 self.current_photo = ImageTk.PhotoImage(img)
-
-
-
                 self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-
-
-
                 self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-
-
-
             except Exception as e:
-
-
-
                 pass
-
-
-
         
-
-
-
         self.win.after(1, self._poll_display)
-
-
-
-    
-
-
 
     def _show_frame(self, img):
 

@@ -3865,11 +3865,7 @@ class RemoteDesktopViewer:
 
 
 
-                    if len(frame_data) < frame_len:
-
-
-
-                        raise ConnectionError("Incomplete frame")
+                    # 帧完整性由recv_exact保证
 
 
 
@@ -3915,10 +3911,6 @@ class RemoteDesktopViewer:
 
                     # 传入帧数据给解码线程，包含帧类型和区域信息
                     self._raw_frame = frame_data
-                    self._frame_event.set()
-
-
-
                     self._frame_event.set()
 
 
@@ -4185,27 +4177,22 @@ class RemoteDesktopViewer:
 
 
     def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):
-        """解码并应用帧 - 支持增量更新
-        frame_type: 0=全帧, 1=部分更新, 2=心跳(不调用此函数)
-        """
+        """解码并应用帧 - 支持增量更新"""
         try:
-            img = Image.open(io.BytesIO(jpeg_data))
+            region = Image.open(io.BytesIO(jpeg_data))
+            region.load()
             
-            # 初始化或处理全帧
             if frame_type == 0:
-                # 全帧，解码后直接作为当前屏幕
-                self._current_screen_img = img.copy()
+                self._current_screen_img = region
             elif frame_type == 1:
-                # 部分更新，将区域paste到当前屏幕
                 if self._current_screen_img is None:
-                    # 还没有全帧数据，暂存区域
-                    self._current_screen_img = img.copy()
-                    return None
-                # 粘贴区域到当前屏幕
-                self._current_screen_img.paste(img, (x, y))
+                    self._current_screen_img = region
+                else:
+                    self._current_screen_img.paste(region, (x, y))
             
-            # 对完整屏幕图像进行缩放
-            iw, ih = self._current_screen_img.size
+            # 在副本上做缩放（不修改原图）
+            display_img = self._current_screen_img
+            iw, ih = display_img.size
             cw, ch = self._canvas_size
             
             if cw > 100 and ch > 100:
@@ -4213,31 +4200,16 @@ class RemoteDesktopViewer:
                 new_w = int(iw * self.screen_scale)
                 new_h = int(ih * self.screen_scale)
                 
-                need_scale = abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02
-                
-                if need_scale:
-                    # 尝试draft降采样
-                    drafted = False
-                    try:
-                        self._current_screen_img.draft('RGB', (new_w, new_h))
-                        self._current_screen_img.load()
-                        dw, dh = self._current_screen_img.size
-                        if dw < iw or dh < ih:
-                            drafted = True
-                            if abs(dw - new_w) > 2 or abs(dh - new_h) > 2:
-                                self._current_screen_img = self._current_screen_img.resize((new_w, new_h), Image.BILINEAR)
-                    except:
-                        pass
-                    
-                    if not drafted:
-                        self._current_screen_img = self._current_screen_img.resize((new_w, new_h), Image.BILINEAR)
+                if abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02:
+                    display_img = display_img.resize((new_w, new_h), Image.BILINEAR)
                 
                 self.offset_x = (cw - new_w) // 2
                 self.offset_y = (ch - new_h) // 2
-                return self._current_screen_img
             else:
-                return self._current_screen_img
-                
+                self.offset_x = 0
+                self.offset_y = 0
+            
+            return display_img
         except:
             return None
     def _poll_display(self):

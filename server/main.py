@@ -4660,87 +4660,204 @@ class RemoteDesktopViewer:
 
 
     def _input_sender(self):
-        """输入发送——TCP直连(零延迟)，HTTP备用"""
-        import socket as _socket
-        tcp_conn = None
-        http_conn = None
-        use_tcp = True
-        tcp_fail = 0
-        
+
+
+
+        """输入发送线程——批量合并指令，HTTP长连接复用"""
+
+
+
+        import http.client
+
+
+
+        conn = None
+
+
+
         while self.running:
+
+
+
             try:
-                # TCP连接(5903端口)
-                if use_tcp and not tcp_conn:
-                    try:
-                        tcp_conn = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-                        tcp_conn.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
-                        tcp_conn.setsockopt(_socket.SOL_SOCKET, _socket.SO_SNDBUF, 65536)
-                        tcp_conn.connect((self.client_ip, 5903))
-                        tcp_conn.settimeout(3)
-                        tcp_fail = 0
-                    except:
-                        try: tcp_conn.close()
-                        except: pass
-                        tcp_conn = None
-                        tcp_fail += 1
-                        if tcp_fail >= 5: use_tcp = False
-                        import time; time.sleep(0.05)
-                        continue
-                
-                # 取指令(1ms超时)
+
+
+
+                # 批量取出队列中的指令
+
+
+
+                batch = []
+
+
+
                 try:
+
+
+
                     item = self._input_queue.get(timeout=0.001)
+
+
+
+                    batch.append(item)
+
+
+
                 except queue.Empty:
-                    continue
+
+
+
+                    continue  # 保持连接
+
+
+
                 
-                # 非阻塞取积压(最多2ms)
-                batch = [item]
+
+
+
+                # 非阻塞取出剩余（最多10ms内积压的）
+
+
+
                 deadline = time.time() + 0.002
-                while not self._input_queue.empty() and len(batch) < 30 and time.time() < deadline:
-                    try: batch.append(self._input_queue.get_nowait())
-                    except queue.Empty: break
-                
-                # 去重
-                deduped = {}
-                for it in batch:
-                    itype = it.get('input_type', '')
-                    if itype in ('mouse_move', 'mouse_drag'):
-                        deduped[itype] = it
-                    else:
-                        deduped[f'{itype}_{len(deduped)}'] = it
-                items = list(deduped.values())
-                
-                # TCP直发(每条一行JSON，不等响应)
-                if tcp_conn:
+
+
+
+                while not self._input_queue.empty() and len(batch) < 20 and time.time() < deadline:
+
+
+
                     try:
-                        for it in items:
-                            tcp_conn.sendall((json.dumps(it) + '\n').encode('utf-8'))
-                        tcp_fail = 0
-                        continue
-                    except:
-                        try: tcp_conn.close()
-                        except: pass
-                        tcp_conn = None
-                        tcp_fail += 1
-                        if tcp_fail >= 3: use_tcp = False
+
+
+
+                        batch.append(self._input_queue.get_nowait())
+
+
+
+                    except queue.Empty:
+
+
+
+                        break
+
+
+
                 
-                # HTTP备用
+
+
+
+                # 去重：mouse_move/mouse_drag只保留最后一条
+
+
+
+                deduped = {}
+
+
+
+                for item in batch:
+
+
+
+                    itype = item.get('input_type', '')
+
+
+
+                    if itype in ('mouse_move', 'mouse_drag'):
+
+
+
+                        deduped[itype] = item
+
+
+
+                    else:
+
+
+
+                        deduped[f'{itype}_{len(deduped)}'] = item
+
+
+
+                
+
+
+
+                # 合并为一次HTTP请求发送（减少TCP连接开销）
+
+
+
+                items = list(deduped.values())
+
+
+
                 try:
-                    if not http_conn:
-                        import http.client
-                        http_conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
+
+
+
+                    if not conn:
+
+
+
+                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
+
+
+
                     data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
-                    http_conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
-                    resp = http_conn.getresponse()
-                    resp.read()
+
+
+
+                    conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+
+
+
+                    resp = conn.getresponse()
+
+
+
+                    resp.read()  # 必须读完response才能复用连接
+
+
+
                 except:
-                    try: http_conn.close()
-                    except: pass
-                    http_conn = None
-                    use_tcp = True
-                    tcp_fail = 0
+
+
+
+                    # 连接断开，重建
+
+
+
+                    try:
+
+
+
+                        conn.close()
+
+
+
+                    except:
+
+
+
+                        pass
+
+
+
+                    conn = None
+
+
+
             except:
+
+
+
                 pass
+
+
+
+    
+
+
 
     def _on_mouse_press(self, event):
 

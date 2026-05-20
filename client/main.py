@@ -1409,9 +1409,6 @@ def start_remote_desktop_server(port=5901):
         # 同时启动TCP流推送服务
         t2 = threading.Thread(target=_stream_server_loop, args=(port + 1,), daemon=True)
         t2.start()
-        # 启动TCP输入服务(port+2=5903)
-        t3 = threading.Thread(target=_input_tcp_server, args=(port + 2,), daemon=True)
-        t3.start()
         
         return True
     except Exception as e:
@@ -1431,68 +1428,6 @@ def stop_remote_desktop_server():
             pass
         _stream_server_sock = None
     print('[远程桌面] 服务已停止')
-
-_input_tcp_sock = None
-
-def _input_tcp_server(port):
-    """TCP输入服务器——零延迟接收输入指令"""
-    global _input_tcp_sock, _remote_desktop_server
-    import socket
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    srv.bind(('0.0.0.0', port))
-    srv.listen(1)
-    srv.settimeout(1.0)
-    print(f'[远程桌面] TCP输入服务已启动，端口 {port}')
-    
-    while _remote_desktop_server:
-        try:
-            conn, addr = srv.accept()
-            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            conn.settimeout(0.5)
-            print(f'[远程桌面] 输入连接来自 {addr}')
-            _input_tcp_sock = conn
-            
-            buf = b''
-            while True:
-                try:
-                    data = conn.recv(8192)
-                    if not data:
-                        break
-                    buf += data
-                    while b'\n' in buf:
-                        line_bytes, buf = buf.split(b'\n', 1)
-                        line_bytes = line_bytes.strip()
-                        if not line_bytes:
-                            continue
-                        try:
-                            input_data = json.loads(line_bytes.decode('utf-8'))
-                            input_type = input_data.get('input_type', '')
-                            if input_type == 'batch':
-                                for item in input_data.get('items', []):
-                                    _execute_input(item)
-                            else:
-                                _execute_input(input_data)
-                        except:
-                            pass
-                except socket.timeout:
-                    continue
-                except:
-                    break
-        except socket.timeout:
-            continue
-        except:
-            break
-        finally:
-            _input_tcp_sock = None
-            try: conn.close()
-            except: pass
-    
-    try: srv.close()
-    except: pass
-    print('[远程桌面] TCP输入服务已停止')
-
 
 
 # ===== 指令处理 =====

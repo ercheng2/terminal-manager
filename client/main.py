@@ -1408,38 +1408,41 @@ def _stream_frames(conn):
     try:
         while True:
             loop_start = time.time()
+            if not use_numpy:
+                force_full_frame = True  # 无numpy时每帧都发全帧
             
             # 截屏
             screenshot = sct.grab(monitor)
             
             # BGRA→RGB转换
-            if use_numpy:
-                arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
-                    screenshot.size[1], screenshot.size[0], 4)[:, :, :3]
-            else:
-                img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
-                arr = np.array(img)
+            screenshot = sct.grab(monitor)
+            img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
             
             # 强制发全帧（首次或周期性）
             if force_full_frame or heartbeat_count >= heartbeat_interval:
-                img = Image.fromarray(arr, 'RGB')
                 send_full_frame(img)
                 force_full_frame = False
                 heartbeat_count = 0
-                prev_arr = arr.copy()
+                if use_numpy:
+                    prev_arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
+                        screenshot.size[1], screenshot.size[0], 4)[:, :, :3].copy()
             else:
                 # 检测变化
-                region = detect_changed_region(prev_arr, arr)
+                if use_numpy:
+                    curr_arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
+                        screenshot.size[1], screenshot.size[0], 4)[:, :, :3]
+                    region = detect_changed_region(prev_arr, curr_arr)
+                else:
+                    region = None  # 无numpy时总是发全帧
                 
                 if region is None:
-                    # 无变化，发送心跳
+                    # 无变化或无numpy，发送心跳
                     send_heartbeat()
                     heartbeat_count += 1
                 else:
                     # 有变化，发送增量帧
-                    img = Image.fromarray(arr, 'RGB')
                     send_incremental_frame(img, region)
-                    prev_arr = arr.copy()
+                    prev_arr = curr_arr.copy()
                     heartbeat_count = 0
             
             # 帧率控制

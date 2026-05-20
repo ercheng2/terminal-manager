@@ -3589,100 +3589,21 @@ class RemoteDesktopViewer:
 
 
     def _fetch_loop(self):
-
-
-
         """帧获取——优先TCP流5902，失败自动回退HTTP 5901"""
-
-
-
-        import socket
-
-
-
-        
-
-
-
         self._get_screen_info()
-
-
-
         self._notify_quality()
-
-
-
         
-
-
-
         while self.running:
-
-
-
-            # 先试TCP流模式
-
-
-
+            # 直接尝试TCP流模式（_fetch_via_tcp内部会连接）
             try:
-
-
-
-                test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-
-
-                test_sock.settimeout(2)
-
-
-
-                test_sock.connect((self.client_ip, 5902))
-
-
-
-                test_sock.close()
-
-
-
-                # TCP可用，用流模式
-
-
-
                 self._fetch_via_tcp()
-
-
-
-                return  # _fetch_via_tcp退出后不再重试
-
-
-
+                return
             except:
-
-
-
                 pass
-
-
-
             
-
-
-
             # TCP不可用，用HTTP模式
-
-
-
             self._fetch_via_http()
-
-
-
             return
-
-
-
-    
-
-
 
     def _fetch_via_tcp(self):
 

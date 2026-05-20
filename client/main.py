@@ -1094,180 +1094,119 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 85
+_screen_quality = 95
 
 def _execute_input(input_data):
-    """执行单条输入指令 - 跨平台支持"""
-    import platform
-    import ctypes
-    import subprocess
+    """执行单条输入指令"""
     import pyautogui
-    
     pyautogui.FAILSAFE = False
     input_type = input_data.get('input_type', '')
-    is_windows = platform.system() == 'Windows'
     
-    if is_windows:
-        # Windows: 使用 Win32 API
-        user32 = ctypes.windll.user32
-        
-        if input_type == 'mouse_move':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            user32.SetCursorPos(x, y)
-        elif input_type == 'mouse_press':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            user32.SetCursorPos(x, y)
-            button = input_data.get('button', 'left')
-            if button == 'left': user32.mouse_event(2, 0, 0, 0, 0)
-            elif button == 'right': user32.mouse_event(8, 0, 0, 0, 0)
-            elif button == 'middle': user32.mouse_event(32, 0, 0, 0, 0)
-        elif input_type == 'mouse_release':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            user32.SetCursorPos(x, y)
-            button = input_data.get('button', 'left')
-            if button == 'left': user32.mouse_event(4, 0, 0, 0, 0)
-            elif button == 'right': user32.mouse_event(16, 0, 0, 0, 0)
-            elif button == 'middle': user32.mouse_event(64, 0, 0, 0, 0)
-        elif input_type == 'mouse_click':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            user32.SetCursorPos(x, y)
-            button = input_data.get('button', 'left')
-            clicks = input_data.get('clicks', 1)
-            for _ in range(clicks):
-                if button == 'left':
-                    user32.mouse_event(2, 0, 0, 0, 0)
-                    user32.mouse_event(4, 0, 0, 0, 0)
-                elif button == 'right':
-                    user32.mouse_event(8, 0, 0, 0, 0)
-                    user32.mouse_event(16, 0, 0, 0, 0)
-        elif input_type == 'mouse_drag':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            user32.SetCursorPos(x, y)
-        elif input_type == 'scroll':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            delta = input_data.get('delta', 0)
-            user32.SetCursorPos(x, y)
-            user32.mouse_event(2048, 0, 0, int(delta), 0)
-        elif input_type == 'key_press':
-            key = input_data.get('key', '')
-            if key:
-                vk_map = {'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
-                           'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
-                           'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23,
-                           'pageup':0x21, 'pagedown':0x22, 'insert':0x2D,
-                           'capslock':0x14, 'numlock':0x90,
-                           'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,
-                           'f5':0x74,'f6':0x75,'f7':0x76,'f8':0x77,
-                           'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B}
-                if len(key) == 1:
-                    vk = user32.VkKeyScanW(ord(key)) & 0xFF
+    import ctypes
+    user32 = ctypes.windll.user32
+    if input_type == 'mouse_move':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
+    elif input_type == 'mouse_press':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
+        button = input_data.get('button', 'left')
+        if button == 'left': user32.mouse_event(2, 0, 0, 0, 0)
+        elif button == 'right': user32.mouse_event(8, 0, 0, 0, 0)
+        elif button == 'middle': user32.mouse_event(32, 0, 0, 0, 0)
+    elif input_type == 'mouse_release':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
+        button = input_data.get('button', 'left')
+        if button == 'left': user32.mouse_event(4, 0, 0, 0, 0)
+        elif button == 'right': user32.mouse_event(16, 0, 0, 0, 0)
+        elif button == 'middle': user32.mouse_event(64, 0, 0, 0, 0)
+    elif input_type == 'mouse_click':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
+        button = input_data.get('button', 'left')
+        clicks = input_data.get('clicks', 1)
+        for _ in range(clicks):
+            if button == 'left':
+                user32.mouse_event(2, 0, 0, 0, 0)
+                user32.mouse_event(4, 0, 0, 0, 0)
+            elif button == 'right':
+                user32.mouse_event(8, 0, 0, 0, 0)
+                user32.mouse_event(16, 0, 0, 0, 0)
+    elif input_type == 'mouse_drag':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
+    elif input_type == 'scroll':
+        x, y = input_data.get('x', 0), input_data.get('y', 0)
+        delta = input_data.get('delta', 0)
+        user32.SetCursorPos(x, y)
+        user32.mouse_event(2048, 0, 0, int(delta), 0)
+    elif input_type == 'key_press':
+        key = input_data.get('key', '')
+        if key:
+            vk_map = {'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
+                       'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
+                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23,
+                       'pageup':0x21, 'pagedown':0x22, 'insert':0x2D,
+                       'capslock':0x14, 'numlock':0x90,
+                       'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,
+                       'f5':0x74,'f6':0x75,'f7':0x76,'f8':0x77,
+                       'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B}
+            if len(key) == 1:
+                vk = user32.VkKeyScanW(ord(key)) & 0xFF
+            else:
+                vk = vk_map.get(key.lower(), 0)
+            if vk:
+                user32.keybd_event(vk, 0, 0, 0)
+                user32.keybd_event(vk, 0, 2, 0)
+    elif input_type == 'key_hotkey':
+        keys = input_data.get('keys', [])
+        if keys:
+            vk_map = {'ctrl':0x11, 'alt':0x12, 'shift':0x10,
+                       'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
+                       'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
+                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23}
+            vks = []
+            for k in keys:
+                if len(k) == 1:
+                    vk = user32.VkKeyScanW(ord(k)) & 0xFF
                 else:
-                    vk = vk_map.get(key.lower(), 0)
+                    vk = vk_map.get(k.lower(), 0)
                 if vk:
+                    vks.append(vk)
                     user32.keybd_event(vk, 0, 0, 0)
-                    user32.keybd_event(vk, 0, 2, 0)
-        elif input_type == 'key_hotkey':
-            keys = input_data.get('keys', [])
-            if keys:
-                vk_map = {'ctrl':0x11, 'alt':0x12, 'shift':0x10,
-                           'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
-                           'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
-                           'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23}
-                vks = []
-                for k in keys:
-                    if len(k) == 1:
-                        vk = user32.VkKeyScanW(ord(k)) & 0xFF
-                    else:
-                        vk = vk_map.get(k.lower(), 0)
-                    if vk:
-                        vks.append(vk)
-                        user32.keybd_event(vk, 0, 0, 0)
-                for vk in reversed(vks):
-                    user32.keybd_event(vk, 0, 2, 0)
-        elif input_type == 'type_text':
-            text = input_data.get('text', '')
-            if text:
-                try:
-                    from ctypes import wintypes
-                    CF_UNICODETEXT = 13
-                    kernel32 = ctypes.windll.kernel32
-                    user32 = ctypes.windll.user32
-                    if user32.OpenClipboard(0):
-                        user32.EmptyClipboard()
-                        data = text.encode('utf-16le') + b'\x00\x00'
-                        hMem = kernel32.GlobalAlloc(0x0042, len(data))
-                        pMem = kernel32.GlobalLock(hMem)
-                        ctypes.cdll.msvcrt.memcpy(pMem, data, len(data))
-                        kernel32.GlobalUnlock(hMem)
-                        user32.SetClipboardData(CF_UNICODETEXT, hMem)
-                        user32.CloseClipboard()
-                        pyautogui.hotkey('ctrl', 'v', _pause=False)
-                except Exception:
-                    for ch in text:
-                        if ord(ch) < 128:
-                            pyautogui.press(ch, _pause=False)
-        elif input_type == 'set_quality':
-            globals().__setitem__('_screen_quality', input_data.get('quality', 50))
-    else:
-        # Linux: 使用 xdotool
-        def _xdo(cmd):
+            for vk in reversed(vks):
+                user32.keybd_event(vk, 0, 2, 0)
+    elif input_type == 'type_text':
+        text = input_data.get('text', '')
+        if text:
+            # 用ctypes直接写剪贴板，不弹黑窗
             try:
-                subprocess.run(cmd, shell=True, capture_output=True)
+                import ctypes
+                from ctypes import wintypes
+                CF_UNICODETEXT = 13
+                kernel32 = ctypes.windll.kernel32
+                user32 = ctypes.windll.user32
+                # 打开剪贴板
+                if user32.OpenClipboard(0):
+                    user32.EmptyClipboard()
+                    # 分配全局内存
+                    data = text.encode('utf-16le') + b'\x00\x00'
+                    hMem = kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE|GMEM_ZEROINIT
+                    pMem = kernel32.GlobalLock(hMem)
+                    ctypes.cdll.msvcrt.memcpy(pMem, data, len(data))
+                    kernel32.GlobalUnlock(hMem)
+                    user32.SetClipboardData(CF_UNICODETEXT, hMem)
+                    user32.CloseClipboard()
+                    pyautogui.hotkey('ctrl', 'v', _pause=False)
             except Exception:
-                pass
-        
-        if input_type == 'mouse_move':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            _xdo(f'xdotool mousemove {x} {y}')
-        elif input_type == 'mouse_press':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            button = input_data.get('button', 'left')
-            btn_map = {'left': '1', 'right': '3', 'middle': '2'}
-            _xdo(f'xdotool mousemove {x} {y} click {btn_map.get(button, "1")}')
-        elif input_type == 'mouse_release':
-            pass  # xdotool click 会自动 release
-        elif input_type == 'mouse_click':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            button = input_data.get('button', 'left')
-            clicks = input_data.get('clicks', 1)
-            btn_map = {'left': '1', 'right': '3', 'middle': '2'}
-            for _ in range(clicks):
-                _xdo(f'xdotool mousemove {x} {y} click {btn_map.get(button, "1")}')
-        elif input_type == 'mouse_drag':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            _xdo(f'xdotool mousemove {x} {y}')
-        elif input_type == 'scroll':
-            x, y = input_data.get('x', 0), input_data.get('y', 0)
-            delta = input_data.get('delta', 0)
-            _xdo(f'xdotool mousemove {x} {y} click --repeat 5 button {5 if delta > 0 else 4}')
-        elif input_type == 'key_press':
-            key = input_data.get('key', '')
-            if key:
-                key_map = {'enter': 'Return', 'backspace': 'BackSpace', 'tab': 'Tab', 
-                          'escape': 'Escape', 'space': 'space', 'delete': 'Delete',
-                          'left': 'Left', 'right': 'Right', 'up': 'Up', 'down': 'Down',
-                          'home': 'Home', 'end': 'End', 'pageup': 'Prior', 'pagedown': 'Next',
-                          'f1': 'F1', 'f2': 'F2', 'f3': 'F3', 'f4': 'F4',
-                          'f5': 'F5', 'f6': 'F6', 'f7': 'F7', 'f8': 'F8',
-                          'f9': 'F9', 'f10': 'F10', 'f11': 'F11', 'f12': 'F12'}
-                xkey = key_map.get(key.lower(), key)
-                _xdo(f'xdotool key {xkey}')
-        elif input_type == 'key_hotkey':
-            keys = input_data.get('keys', [])
-            if keys:
-                key_map = {'ctrl': 'ctrl', 'alt': 'alt', 'shift': 'shift', 'cmd': 'super',
-                          'enter': 'Return', 'backspace': 'BackSpace', 'tab': 'Tab',
-                          'escape': 'Escape', 'space': 'space'}
-                xkeys = '+'.join(key_map.get(k.lower(), k) for k in keys)
-                _xdo(f'xdotool key {xkeys}')
-        elif input_type == 'type_text':
-            text = input_data.get('text', '')
-            if text:
-                # 转义特殊字符
-                escaped = text.replace("'", "'\"'\"'")
-                _xdo(f'xdotool type --delay 10 "{escaped}"')
-        elif input_type == 'set_quality':
-            globals().__setitem__('_screen_quality', input_data.get('quality', 50))
+                # 回退：逐字符输入ASCII
+                for ch in text:
+                    if ord(ch) < 128:
+                        pyautogui.press(ch, _pause=False)
+    elif input_type == 'set_quality':
+        global _screen_quality
+        _screen_quality = input_data.get('quality', 50)
 
 class ScreenHandler(BaseHTTPRequestHandler):
     """截屏HTTP请求处理器"""
@@ -1370,101 +1309,52 @@ class ScreenHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def _stream_frames(conn):
-    """TCP流推送——增量编码版，只传输变化区域"""
+    """TCP流推送——极速版，全分辨率，后台编码"""
     import mss
     import socket
-    import numpy as np
-    from PIL import Image
-    import io
-    import struct
-    import time as time_module
-    
+    import zlib
     sct = mss.mss()
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-    screen_w = monitor['width']
-    screen_h = monitor['height']
     
-    # 前一帧数据
-    prev_arr = None
+    prev_hash = None
+    last_send_time = time.time()
+    target_interval = 1.0 / 60  # 目标60fps
+    use_numpy = False
+    try:
+        import numpy as np
+        use_numpy = True
+    except ImportError:
+        pass
+    
+    # 预分配JPEG缓冲区
     jpeg_buf = io.BytesIO()
-    heartbeat_interval = 0.05  # 静止时50ms心跳
-    last_send_time = time_module.time()
-    
-    def send_frame(frame_type, x, y, w, h, jpeg_data):
-        """发送帧头+数据"""
-        header = struct.pack('!BIIIII', frame_type, x, y, w, h, len(jpeg_data) if frame_type != 2 else 0)
-        if frame_type != 2:
-            conn.sendall(header + jpeg_data)
-        else:
-            conn.sendall(header)
     
     try:
         while True:
-            # 截取当前帧
             screenshot = sct.grab(monitor)
             
-            # BGRA→RGB numpy
-            arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
-                screenshot.size[1], screenshot.size[0], 4)[:, :, :3]
-            
-            if prev_arr is None:
-                # 首次全帧
-                img = Image.fromarray(arr, 'RGB')
-                jpeg_buf.seek(0)
-                jpeg_buf.truncate()
-                img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=1, optimize=False)
-                jpeg_data = jpeg_buf.getvalue()
-                send_frame(0, 0, 0, screen_w, screen_h, jpeg_data)
-                prev_arr = arr.copy()
-                prev_img = img.copy()
+            # BGRA→RGB转换（numpy比PIL快30%）
+            if use_numpy:
+                arr = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(screenshot.size[1], screenshot.size[0], 4)
+                img = Image.fromarray(arr[:, :, :3], 'RGB')
             else:
-                # 对比前后帧差异
-                diff = np.any(arr != prev_arr, axis=2)
-                rows = np.any(diff, axis=1)
-                cols = np.any(diff, axis=0)
-                
-                if not np.any(rows) or not np.any(cols):
-                    # 无变化，发送心跳
-                    now = time_module.time()
-                    if now - last_send_time >= heartbeat_interval:
-                        send_frame(2, 0, 0, 0, 0, b'')
-                        last_send_time = now
-                    time_module.sleep(0.001)
-                    continue
-                
-                # 找出变化区域边界
-                row_indices = np.where(rows)[0]
-                col_indices = np.where(cols)[0]
-                r1, r2 = row_indices[0], row_indices[-1] + 1
-                c1, c2 = col_indices[0], col_indices[-1] + 1
-                
-                # 计算变化区域占比
-                changed_pixels = np.sum(diff)
-                total_pixels = screen_w * screen_h
-                change_ratio = changed_pixels / total_pixels
-                
-                if change_ratio > 0.85:
-                    # 变化>85%，直接发全帧
-                    img = Image.fromarray(arr, 'RGB')
-                    jpeg_buf.seek(0)
-                    jpeg_buf.truncate()
-                    img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=1, optimize=False)
-                    jpeg_data = jpeg_buf.getvalue()
-                    send_frame(0, 0, 0, screen_w, screen_h, jpeg_data)
-                else:
-                    # 只编码变化区域
-                    region = arr[r1:r2, c1:c2]
-                    img = Image.fromarray(region, 'RGB')
-                    jpeg_buf.seek(0)
-                    jpeg_buf.truncate()
-                    img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=1, optimize=False)
-                    jpeg_data = jpeg_buf.getvalue()
-                    send_frame(1, c1, r1, c2 - c1, r2 - r1, jpeg_data)
-                
-                prev_arr = arr.copy()
+                img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
             
-            last_send_time = time_module.time()
+            # JPEG编码（使用_screen_quality变量，默认95最高画质）
+            jpeg_buf.seek(0)
+            jpeg_buf.truncate()
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
+            jpeg_data = jpeg_buf.getvalue()
             
+            # 发送
+            conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
+            
+            # 自适应帧率：处理快就多发，不固定sleep
+            now = time.time()
+            elapsed = now - last_send_time
+            last_send_time = now
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     except Exception as e:
@@ -1475,6 +1365,7 @@ def _stream_frames(conn):
             conn.close()
         except:
             pass
+
 def _stream_server_loop(port):
     """TCP流服务器——等待服务器端连接后推送帧"""
     global _stream_server_sock
@@ -1519,10 +1410,6 @@ def start_remote_desktop_server(port=5901):
         t2 = threading.Thread(target=_stream_server_loop, args=(port + 1,), daemon=True)
         t2.start()
         
-        # 启动TCP输入服务
-        t3 = threading.Thread(target=_input_tcp_server, args=(port + 2,), daemon=True)
-        t3.start()
-        
         return True
     except Exception as e:
         print(f'[远程桌面] 截屏服务启动失败: {e}')
@@ -1542,59 +1429,6 @@ def stop_remote_desktop_server():
         _stream_server_sock = None
     print('[远程桌面] 服务已停止')
 
-
-
-
-def _input_tcp_server(port):
-    """TCP输入服务器——接收服务器端发送的输入指令"""
-    import socket
-    import json
-    
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(('0.0.0.0', port))
-    sock.listen(1)
-    sock.settimeout(1.0)
-    print(f'[远程桌面] TCP输入服务已启动，端口 {port}')
-    
-    while _remote_desktop_server:
-        try:
-            conn, addr = sock.accept()
-            print(f'[远程桌面] 输入连接: {addr}')
-            try:
-                buf = ''
-                while True:
-                    data = conn.recv(4096)
-                    if not data:
-                        break
-                    buf += data.decode('utf-8', errors='ignore')
-                    # 按行处理JSON指令
-                    while '\n' in buf:
-                        line, buf = buf.split('\n', 1)
-                        line = line.strip()
-                        if line:
-                            try:
-                                input_data = json.loads(line)
-                                # 批量指令支持
-                                if input_data.get('input_type') == 'batch':
-                                    for item in input_data.get('items', []):
-                                        _execute_input(item)
-                                else:
-                                    _execute_input(input_data)
-                            except json.JSONDecodeError:
-                                pass
-            except Exception as e:
-                print(f'[远程桌面] 输入处理异常: {e}')
-            finally:
-                conn.close()
-        except socket.timeout:
-            continue
-        except Exception as e:
-            print(f'[远程桌面] TCP输入服务异常: {e}')
-            break
-    
-    sock.close()
-    print(f'[远程桌面] TCP输入服务已停止')
 
 # ===== 指令处理 =====
 class CommandHandler:

@@ -3380,8 +3380,8 @@ class RemoteDesktopViewer:
         self.canvas.focus_set()
 
         # 用pynput监听全局键盘，直接转发按键到远程
-        set()  # removed = set()
-        None  # removed = None
+        self._pynput_keys = set()
+        self._pynput_listener = None
         self._start_keyboard_listener()
 
         # 禁用本地输入法，让按键直接发到远程（远程输入法处理中文）
@@ -3719,7 +3719,7 @@ class RemoteDesktopViewer:
 
 
 
-                sock.settimeout(3)
+                sock.settimeout(5)
 
 
 
@@ -4019,13 +4019,10 @@ class RemoteDesktopViewer:
 
 
 
-                with opener.open(req, timeout=1) as resp:
+                with urllib.request.urlopen(req, timeout=2) as resp:
 
 
 
-                    if resp.status == 304:
-                        # 画面没变化，跳过
-                        continue
                     jpeg_data = resp.read()
 
 
@@ -4107,41 +4104,92 @@ class RemoteDesktopViewer:
 
 
     def _decode_worker(self):
-        """解码线程：JPEG解码+缩放，主线程只做显示"""
+
+
+
+        """独立解码线程：用Event等待帧，跳过积压帧只解码最新"""
+
+
+
         while self.running:
-            self._frame_event.wait(timeout=0.016)
+
+
+
+            self._frame_event.wait(timeout=0.1)
+
+
+
             self._frame_event.clear()
+
+
+
             
+
+
+
             raw = self._raw_frame
+
+
+
             if raw:
+
+
+
                 self._raw_frame = None
-                # 跳过积压帧
+
+
+
+                # 如果有更新的帧，跳过当前帧
+
+
+
                 while self._raw_frame is not None:
+
+
+
                     raw = self._raw_frame
+
+
+
                     self._raw_frame = None
-                
+
+
+
                 img = self._decode_and_scale(raw)
+
+
+
                 if img:
-                    self._latest_img = img
-                    # 通知主线程更新显示
+
+
+
+                    # 把PhotoImage创建也放后台，减少主线程负担
+
+
+
                     try:
-                        self.win.after_idle(self._display_latest_frame)
+
+
+
+                        photo = ImageTk.PhotoImage(img)
+
+
+
+                        self._latest_photo = (photo, self.offset_x, self.offset_y)
+
+
+
                     except:
-                        pass
+
+
+
+                        self._latest_img = img
+
+
+
     
-    def _display_latest_frame(self):
-        """主线程：把最新帧显示到canvas"""
-        if not self.running:
-            return
-        img = self._latest_img
-        if img:
-            self._latest_img = None
-            try:
-                self.current_photo = ImageTk.PhotoImage(img)
-                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-                self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-            except:
-                pass
+
+
 
     def _decode_and_scale(self, jpeg_data):
 
@@ -4304,22 +4352,112 @@ class RemoteDesktopViewer:
 
 
     def _poll_display(self):
-        """主线程轮询：检查新帧，有就显示"""
+
+
+
+        """主线程轮询：1ms检查新帧，有就显示"""
+
+
+
         if not self.running:
+
+
+
             return
+
+
+
         
-        # 检查后台解码线程的结果
-        img = self._latest_img
-        if img:
-            self._latest_img = None
+
+
+
+        # 优先用后台线程创建好的PhotoImage（省掉主线程转换时间）
+
+
+
+        if self._latest_photo:
+
+
+
+            photo, ox, oy = self._latest_photo
+
+
+
+            self._latest_photo = None
+
+
+
+            self.current_photo = photo
+
+
+
             try:
-                self.current_photo = ImageTk.PhotoImage(img)
+
+
+
                 self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
-                self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
-            except:
+
+
+
+                self.canvas.coords(self._canvas_img_id, ox, oy)
+
+
+
+            except Exception as e:
+
+
+
                 pass
+
+
+
+        elif self._latest_img:
+
+
+
+            img = self._latest_img
+
+
+
+            self._latest_img = None
+
+
+
+            try:
+
+
+
+                self.current_photo = ImageTk.PhotoImage(img)
+
+
+
+                self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+
+
+
+                self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
+
+
+
+            except Exception as e:
+
+
+
+                pass
+
+
+
         
+
+
+
         self.win.after(1, self._poll_display)
+
+
+
+    
+
+
 
     def _show_frame(self, img):
 
@@ -4522,92 +4660,233 @@ class RemoteDesktopViewer:
 
 
     def _input_sender(self):
-        """输入发送线程——TCP直连5903，零延迟，HTTP备用"""
-        import socket as _socket
-        tcp_conn = None
-        http_conn = None
-        use_tcp = True
-        tcp_fail_count = 0
-        
+
+
+
+        """输入发送线程——批量合并指令，HTTP长连接复用"""
+
+
+
+        import http.client
+
+
+
+        conn = None
+
+
+
         while self.running:
+
+
+
             try:
-                # 尝试TCP连接（5903端口）
-                if use_tcp and not tcp_conn:
-                    try:
-                        tcp_conn = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-                        tcp_conn.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
-                        tcp_conn.setsockopt(_socket.SOL_SOCKET, _socket.SO_SNDBUF, 65536)
-                        tcp_conn.connect((self.client_ip, 5903))
-                        tcp_conn.settimeout(3)
-                        tcp_fail_count = 0
-                    except:
-                        try: tcp_conn.close()
-                        except: pass
-                        tcp_conn = None
-                        tcp_fail_count += 1
-                        if tcp_fail_count >= 5:
-                            use_tcp = False  # TCP不可用，切HTTP
-                        time.sleep(0.05)
-                        continue
-                
-                # 取指令
+
+
+
+                # 批量取出队列中的指令
+
+
+
+                batch = []
+
+
+
                 try:
+
+
+
                     item = self._input_queue.get(timeout=0.001)
+
+
+
+                    batch.append(item)
+
+
+
                 except queue.Empty:
+
+
+
+                    # 空闲时关闭长连接，避免占用资源
+
+
+
+                    if conn:
+
+
+
+                        try:
+
+
+
+                            conn.close()
+
+
+
+                        except:
+
+
+
+                            pass
+
+
+
+                        conn = None
+
+
+
                     continue
+
+
+
                 
-                # 非阻塞取积压
-                batch = [item]
-                while not self._input_queue.empty() and len(batch) < 30:
+
+
+
+                # 非阻塞取出剩余（最多10ms内积压的）
+
+
+
+                deadline = time.time() + 0.01
+
+
+
+                while not self._input_queue.empty() and len(batch) < 20 and time.time() < deadline:
+
+
+
                     try:
+
+
+
                         batch.append(self._input_queue.get_nowait())
+
+
+
                     except queue.Empty:
+
+
+
                         break
+
+
+
                 
-                # 去重
+
+
+
+                # 去重：mouse_move/mouse_drag只保留最后一条
+
+
+
                 deduped = {}
-                for it in batch:
-                    itype = it.get('input_type', '')
+
+
+
+                for item in batch:
+
+
+
+                    itype = item.get('input_type', '')
+
+
+
                     if itype in ('mouse_move', 'mouse_drag'):
-                        deduped[itype] = it
+
+
+
+                        deduped[itype] = item
+
+
+
                     else:
-                        deduped[f'{itype}_{len(deduped)}'] = it
+
+
+
+                        deduped[f'{itype}_{len(deduped)}'] = item
+
+
+
+                
+
+
+
+                # 合并为一次HTTP请求发送（减少TCP连接开销）
+
+
+
                 items = list(deduped.values())
-                
-                # TCP直发（每条一行JSON，不等响应）
-                if tcp_conn:
-                    try:
-                        for it in items:
-                            line = json.dumps(it) + '\n'
-                            tcp_conn.sendall(line.encode('utf-8'))
-                        tcp_fail_count = 0
-                        continue
-                    except:
-                        try: tcp_conn.close()
-                        except: pass
-                        tcp_conn = None
-                        tcp_fail_count += 1
-                        if tcp_fail_count >= 3:
-                            use_tcp = False
-                
-                # HTTP备用
+
+
+
                 try:
-                    if not http_conn:
-                        import http.client
-                        http_conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
+
+
+
+                    if not conn:
+
+
+
+                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=1)
+
+
+
                     data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
-                    http_conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
-                    resp = http_conn.getresponse()
-                    resp.read()
+
+
+
+                    conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+
+
+
+                    resp = conn.getresponse()
+
+
+
+                    resp.read()  # 必须读完response才能复用连接
+
+
+
                 except:
-                    try: http_conn.close()
-                    except: pass
-                    http_conn = None
-                    use_tcp = True  # 重试TCP
-                    tcp_fail_count = 0
-                    
+
+
+
+                    # 连接断开，重建
+
+
+
+                    try:
+
+
+
+                        conn.close()
+
+
+
+                    except:
+
+
+
+                        pass
+
+
+
+                    conn = None
+
+
+
             except:
+
+
+
                 pass
+
+
+
+    
+
+
+
     def _on_mouse_press(self, event):
 
 
@@ -4710,13 +4989,35 @@ class RemoteDesktopViewer:
 
 
     def _on_mouse_move(self, event):
-        """鼠标移动 - 直接TCP发送，4ms节流"""
+
+
+
         now = time.time()
-        if now - self._last_move_time < 0.004:
+
+
+
+        if now - self._last_move_time < 0.03:  # 30ms节流
+
+
+
             return
+
+
+
         self._last_move_time = now
+
+
+
         x, y = self._canvas_to_client(event.x, event.y)
+
+
+
         self._send_input({'input_type': 'mouse_move', 'x': x, 'y': y})
+
+
+
+    
+
 
 
     def _on_canvas_resize(self, event):
@@ -4759,7 +5060,96 @@ class RemoteDesktopViewer:
 
 
 
-    
+    def _start_keyboard_listener(self):
+        """启动pynput全局键盘监听"""
+        try:
+            from pynput import keyboard
+
+            name_map = {
+                'enter': 'enter', 'return': 'enter',
+                'backspace': 'backspace', 'tab': 'tab',
+                'space': 'space', 'delete': 'delete',
+                'left': 'left', 'right': 'right', 'up': 'up', 'down': 'down',
+                'home': 'home', 'end': 'end',
+                'page_up': 'pageup', 'page_down': 'pagedown',
+                'caps_lock': 'capslock', 'insert': 'insert',
+                'esc': 'escape', 'num_lock': 'numlock',
+            }
+
+            def on_press(key):
+                if not self.running:
+                    return False
+                try:
+                    # 只在远程桌面窗口获得焦点时才转发按键
+                    try:
+                        import ctypes
+                        hwnd = ctypes.windll.user32.GetForegroundWindow()
+                        # 检查当前前台窗口是否是远程桌面窗口
+                        current_hwnd = int(self.win.winfo_id())
+                        # winfo_id返回的是子控件句柄，需要获取顶层窗口
+                        top_hwnd = ctypes.windll.user32.GetAncestor(current_hwnd, 2)  # GA_ROOT=2
+                        if hwnd != top_hwnd:
+                            return  # 不是远程桌面窗口，不处理
+                    except:
+                        pass
+
+                    # 记录按键状态
+                    if hasattr(key, 'name') and key.name:
+                        self._pynput_keys.add(key.name)
+
+                    # 判断修饰键
+                    mods = []
+                    if any(k in self._pynput_keys for k in ('ctrl', 'ctrl_l', 'ctrl_r')):
+                        mods.append('ctrl')
+                    if any(k in self._pynput_keys for k in ('alt', 'alt_l', 'alt_r')):
+                        mods.append('alt')
+                    if any(k in self._pynput_keys for k in ('shift', 'shift_l', 'shift_r')):
+                        mods.append('shift')
+
+                    # 发送按键到远程
+                    if hasattr(key, 'char') and key.char:
+                        ch = key.char
+                        # Ctrl按住时char变成控制字符，需要转回字母
+                        if mods and ord(ch) < 32 and ord(ch) >= 1:
+                            ch = chr(ord(ch) - 1 + ord('a'))  # →'c', →'v'等
+                        if mods:
+                            self._send_input({"input_type": "key_hotkey", "keys": mods + [ch]})
+                        else:
+                            self._send_input({"input_type": "key_press", "key": ch})
+                    elif hasattr(key, 'name') and key.name:
+                        # 修饰键不单独发送，只用于组合键
+                        if key.name in ('ctrl_l', 'ctrl_r', 'alt_l', 'alt_r', 'shift_l', 'shift_r', 'cmd', 'cmd_l', 'cmd_r'):
+                            pass
+                        elif key.name.startswith('f') and key.name[1:].isdigit():
+                            self._send_input({"input_type": "key_press", "key": key.name})
+                        else:
+                            mapped = name_map.get(key.name, key.name)
+                            if mods:
+                                self._send_input({"input_type": "key_hotkey", "keys": mods + [mapped]})
+                            else:
+                                self._send_input({"input_type": "key_press", "key": mapped})
+                except:
+                    pass
+
+            def on_release(key):
+                if not self.running:
+                    return False
+                try:
+                    if hasattr(key, 'name') and key.name:
+                        self._pynput_keys.discard(key.name)
+                except:
+                    pass
+
+            self._pynput_listener = keyboard.Listener(
+                on_press=on_press,
+                on_release=on_release
+            )
+            self._pynput_listener.daemon = True
+            self._pynput_listener.start()
+        except ImportError:
+            # pynput不可用，回退到Tkinter方式
+            self.canvas.bind('<Key>', self._on_key_press_tk)
+
     def _on_key_press_tk(self, event):
         """Tkinter回退键盘处理"""
         key = event.keysym
@@ -4775,7 +5165,7 @@ class RemoteDesktopViewer:
         """关闭查看器"""
         if getattr(self, '_pynput_listener', None):
             try:
-                None  # removed.stop()
+                self._pynput_listener.stop()
             except:
                 pass
 
@@ -4821,7 +5211,7 @@ class RemoteDesktopViewer:
 
 
 
-            urllib.request.urlopen(req, timeout=1)
+            urllib.request.urlopen(req, timeout=2)
 
 
 

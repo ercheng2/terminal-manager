@@ -1094,10 +1094,7 @@ _remote_desktop_server = None
 _stream_server_sock = None
 _last_screen_hash = None
 _last_screen_jpeg = None
-_screen_quality = 85
-_last_frame_data = None
-_last_frame_hash = None
-_mss_instance = None
+_screen_quality = 95
 
 def _execute_input(input_data):
     """执行单条输入指令"""
@@ -1105,7 +1102,6 @@ def _execute_input(input_data):
     pyautogui.FAILSAFE = False
     input_type = input_data.get('input_type', '')
     
-    # ctypes Win32 API（比pyautogui快10倍+）
     import ctypes
     user32 = ctypes.windll.user32
     if input_type == 'mouse_move':
@@ -1113,29 +1109,23 @@ def _execute_input(input_data):
         user32.SetCursorPos(x, y)
     elif input_type == 'mouse_press':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
-        button = input_data.get('button', 'left')
         user32.SetCursorPos(x, y)
-        if button == 'left':
-            user32.mouse_event(2, 0, 0, 0, 0)
-        elif button == 'right':
-            user32.mouse_event(8, 0, 0, 0, 0)
-        elif button == 'middle':
-            user32.mouse_event(32, 0, 0, 0, 0)
+        button = input_data.get('button', 'left')
+        if button == 'left': user32.mouse_event(2, 0, 0, 0, 0)
+        elif button == 'right': user32.mouse_event(8, 0, 0, 0, 0)
+        elif button == 'middle': user32.mouse_event(32, 0, 0, 0, 0)
     elif input_type == 'mouse_release':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
-        button = input_data.get('button', 'left')
         user32.SetCursorPos(x, y)
-        if button == 'left':
-            user32.mouse_event(4, 0, 0, 0, 0)
-        elif button == 'right':
-            user32.mouse_event(16, 0, 0, 0, 0)
-        elif button == 'middle':
-            user32.mouse_event(64, 0, 0, 0, 0)
+        button = input_data.get('button', 'left')
+        if button == 'left': user32.mouse_event(4, 0, 0, 0, 0)
+        elif button == 'right': user32.mouse_event(16, 0, 0, 0, 0)
+        elif button == 'middle': user32.mouse_event(64, 0, 0, 0, 0)
     elif input_type == 'mouse_click':
         x, y = input_data.get('x', 0), input_data.get('y', 0)
+        user32.SetCursorPos(x, y)
         button = input_data.get('button', 'left')
         clicks = input_data.get('clicks', 1)
-        user32.SetCursorPos(x, y)
         for _ in range(clicks):
             if button == 'left':
                 user32.mouse_event(2, 0, 0, 0, 0)
@@ -1250,7 +1240,6 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 # 解析参数
                 quality = _screen_quality
                 check_hash = None
-                scale = 1.0
                 if '?' in self.path:
                     params = self.path.split('?', 1)[1]
                     for p in params.split('&'):
@@ -1258,38 +1247,17 @@ class ScreenHandler(BaseHTTPRequestHandler):
                             quality = int(p.split('=')[1])
                         if p.startswith('hash='):
                             check_hash = p.split('=')[1]
-                        if p.startswith('scale='):
-                            try:
-                                scale = float(p.split('=')[1])
-                            except:
-                                scale = 1.0
                 
-                # 截屏（复用mss实例，避免每次创建）
-                try:
-                    sct = _mss_instance
-                except NameError:
-                    sct = mss.mss()
-                    _mss_instance = sct
-                monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                screenshot = sct.grab(monitor)
-                img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+                # 截屏
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                    screenshot = sct.grab(monitor)
+                    img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
                 
                 # 压缩为JPEG
                 buf = io.BytesIO()
-                img.save(buf, format='JPEG', quality=quality, subsampling=1)
+                img.save(buf, format='JPEG', quality=quality, subsampling=0)
                 jpeg_data = buf.getvalue()
-                
-                # 帧差分检测 - 画面没变化就返回304
-                global _last_frame_data, _last_frame_hash
-                frame_hash = hash(jpeg_data)
-                if frame_hash == _last_frame_hash and _last_frame_data is not None:
-                    # 画面没变化，返回304
-                    self.send_response(304)
-                    self.send_header('Cache-Control', 'no-cache')
-                    self.end_headers()
-                    return
-                _last_frame_hash = frame_hash
-                _last_frame_data = jpeg_data
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'image/jpeg')
@@ -1348,13 +1316,15 @@ def _stream_frames(conn):
     sct = mss.mss()
     monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
     
+    prev_hash = None
     last_send_time = time.time()
     target_interval = 1.0 / 60  # 目标60fps
+    use_numpy = False
     try:
         import numpy as np
         use_numpy = True
     except ImportError:
-        use_numpy = False
+        pass
     
     # 预分配JPEG缓冲区
     jpeg_buf = io.BytesIO()
@@ -1370,16 +1340,16 @@ def _stream_frames(conn):
             else:
                 img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
             
-            # JPEG编码
+            # JPEG编码（使用_screen_quality变量，默认95最高画质）
             jpeg_buf.seek(0)
             jpeg_buf.truncate()
-            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=1, optimize=False)
+            img.save(jpeg_buf, format='JPEG', quality=_screen_quality, subsampling=0, optimize=False)
             jpeg_data = jpeg_buf.getvalue()
             
             # 发送
             conn.sendall(struct.pack('!I', len(jpeg_data)) + jpeg_data)
             
-            # 自适应帧率
+            # 自适应帧率：处理快就多发，不固定sleep
             now = time.time()
             elapsed = now - last_send_time
             last_send_time = now
@@ -1439,9 +1409,6 @@ def start_remote_desktop_server(port=5901):
         # 同时启动TCP流推送服务
         t2 = threading.Thread(target=_stream_server_loop, args=(port + 1,), daemon=True)
         t2.start()
-        # 同时启动TCP输入服务
-        t3 = threading.Thread(target=_input_tcp_server, args=(port + 2,), daemon=True)
-        t3.start()
         
         return True
     except Exception as e:
@@ -1462,72 +1429,6 @@ def stop_remote_desktop_server():
         _stream_server_sock = None
     print('[远程桌面] 服务已停止')
 
-_input_tcp_sock = None
-
-def _input_tcp_server(port):
-    """TCP输入服务器——接收服务器端的输入指令，零延迟"""
-    global _input_tcp_sock
-    import socket
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    srv.bind(('0.0.0.0', port))
-    srv.listen(1)
-    srv.settimeout(1.0)
-    print(f'[远程桌面] TCP输入服务已启动，端口 {port}')
-    
-    while _remote_desktop_server or _stream_server_sock:
-        try:
-            conn, addr = srv.accept()
-            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-            conn.settimeout(0.5)
-            print(f'[远程桌面] 输入连接来自 {addr}')
-            _input_tcp_sock = conn
-            
-            buf = b''
-            while True:
-                try:
-                    data = conn.recv(8192)
-                    if not data:
-                        break
-                    buf += data
-                    # 按行分割JSON指令（每条指令以\n结尾）
-                    while b'\n' in buf:
-                        line, buf = buf.split(b'\n', 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            input_data = json.loads(line.decode('utf-8'))
-                            input_type = input_data.get('input_type', '')
-                            if input_type == 'batch':
-                                for item in input_data.get('items', []):
-                                    _execute_input(item)
-                            else:
-                                _execute_input(input_data)
-                        except:
-                            pass
-                except socket.timeout:
-                    continue
-                except:
-                    break
-        except socket.timeout:
-            continue
-        except:
-            break
-        finally:
-            _input_tcp_sock = None
-            try:
-                conn.close()
-            except:
-                pass
-    
-    try:
-        srv.close()
-    except:
-        pass
-    print('[远程桌面] TCP输入服务已停止')
 
 # ===== 指令处理 =====
 class CommandHandler:

@@ -3839,7 +3839,7 @@ class RemoteDesktopViewer:
                     
                     # 读21字节帧头
                     frame_header = recv_exact(sock, 21)
-                    frame_type, x, y, fw, fh, jpeg_len = struct.unpack('!B4II', frame_header)
+                    frame_type, x, y, fw, fh, jpeg_len = struct.unpack('!BIIIII', frame_header)
                     
                     if frame_type == 2:
                         # 心跳，跳过

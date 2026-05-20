@@ -1392,9 +1392,8 @@ def _stream_frames(conn):
     
     def send_frame(frame_type, x, y, w, h, jpeg_data):
         """发送帧头+数据"""
-        header = struct.pack('!B4II', frame_type, x, y, w, h)
-        if frame_type != 2:  # 非心跳帧需要发送JPEG数据
-            header += struct.pack('!I', len(jpeg_data))
+        header = struct.pack('!BIIIII', frame_type, x, y, w, h, len(jpeg_data) if frame_type != 2 else 0)
+        if frame_type != 2:
             conn.sendall(header + jpeg_data)
         else:
             conn.sendall(header)

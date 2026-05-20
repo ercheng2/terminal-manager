@@ -1096,6 +1096,8 @@ _last_screen_hash = None
 _last_screen_jpeg = None
 _screen_quality = 95
 
+_pending_clipboard = ''
+
 def _execute_input(input_data):
     """执行单条输入指令"""
     import pyautogui
@@ -1151,7 +1153,13 @@ def _execute_input(input_data):
                        'capslock':0x14, 'numlock':0x90,
                        'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,
                        'f5':0x74,'f6':0x75,'f7':0x76,'f8':0x77,
-                       'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B}
+                       'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B,
+                       'numpad_0':0x60,'numpad_1':0x61,'numpad_2':0x62,'numpad_3':0x63,
+                       'numpad_4':0x64,'numpad_5':0x65,'numpad_6':0x66,
+                       'numpad_7':0x67,'numpad_8':0x68,'numpad_9':0x69,
+                       'numpad_decimal':0x6E,'numpad_add':0x6B,
+                       'numpad_subtract':0x6D,'numpad_multiply':0x6A,
+                       'numpad_divide':0x6F}
             if len(key) == 1:
                 vk = user32.VkKeyScanW(ord(key)) & 0xFF
             else:
@@ -1165,7 +1173,13 @@ def _execute_input(input_data):
             vk_map = {'ctrl':0x11, 'alt':0x12, 'shift':0x10,
                        'enter':0x0D, 'backspace':0x08, 'tab':0x09, 'escape':0x1B,
                        'space':0x20, 'delete':0x2E, 'left':0x25, 'right':0x27,
-                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23}
+                       'up':0x26, 'down':0x28, 'home':0x24, 'end':0x23,
+                       'numpad_0':0x60,'numpad_1':0x61,'numpad_2':0x62,'numpad_3':0x63,
+                       'numpad_4':0x64,'numpad_5':0x65,'numpad_6':0x66,
+                       'numpad_7':0x67,'numpad_8':0x68,'numpad_9':0x69,
+                       'numpad_decimal':0x6E,'numpad_add':0x6B,
+                       'numpad_subtract':0x6D,'numpad_multiply':0x6A,
+                       'numpad_divide':0x6F}
             vks = []
             for k in keys:
                 if len(k) == 1:
@@ -1204,6 +1218,41 @@ def _execute_input(input_data):
                 for ch in text:
                     if ord(ch) < 128:
                         pyautogui.press(ch, _pause=False)
+    elif input_type == 'set_clipboard':
+        text = input_data.get('text', '')
+        if text:
+            try:
+                import ctypes
+                CF_UNICODETEXT = 13
+                kernel32 = ctypes.windll.kernel32
+                user32 = ctypes.windll.user32
+                if user32.OpenClipboard(0):
+                    user32.EmptyClipboard()
+                    data = text.encode('utf-16le') + b'\x00\x00'
+                    hMem = kernel32.GlobalAlloc(0x0042, len(data))
+                    pMem = kernel32.GlobalLock(hMem)
+                    ctypes.cdll.msvcrt.memcpy(pMem, data, len(data))
+                    kernel32.GlobalUnlock(hMem)
+                    user32.SetClipboardData(CF_UNICODETEXT, hMem)
+                    user32.CloseClipboard()
+            except:
+                pass
+    elif input_type == 'get_clipboard':
+        global _pending_clipboard
+        _pending_clipboard = ''
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            if user32.OpenClipboard(0):
+                hClip = user32.GetClipboardData(13)
+                if hClip:
+                    pClip = user32.GlobalLock(hClip)
+                    text = ctypes.c_wchar_p(pClip).value
+                    user32.GlobalUnlock(hClip)
+                    _pending_clipboard = text or ''
+                user32.CloseClipboard()
+        except:
+            pass
     elif input_type == 'set_quality':
         global _screen_quality
         _screen_quality = input_data.get('quality', 50)
@@ -1298,7 +1347,10 @@ class ScreenHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({'status': 'ok'}).encode())
+                resp_data = {'status': 'ok'}
+                if input_type == 'get_clipboard' or (input_type == 'batch' and any(item.get('input_type') == 'get_clipboard' for item in input_data.get('items', []))):
+                    resp_data['clipboard'] = _pending_clipboard
+                self.wfile.write(json.dumps(resp_data).encode())
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()

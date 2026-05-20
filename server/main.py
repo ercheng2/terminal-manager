@@ -4305,6 +4305,21 @@ class RemoteDesktopViewer:
 
 
 
+
+    def _get_remote_clipboard(self):
+        """从远程客户端获取剪贴板内容"""
+        import http.client
+        try:
+            conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=2)
+            data = json.dumps({'input_type': 'get_clipboard'}).encode('utf-8')
+            conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+            resp = conn.getresponse()
+            resp_data = json.loads(resp.read().decode('utf-8'))
+            conn.close()
+            return resp_data.get('clipboard', '')
+        except:
+            return ''
+
     def _send_input(self, input_data):
 
 
@@ -4736,6 +4751,14 @@ class RemoteDesktopViewer:
                 'page_up': 'pageup', 'page_down': 'pagedown',
                 'caps_lock': 'capslock', 'insert': 'insert',
                 'esc': 'escape', 'num_lock': 'numlock',
+                # 小键盘
+                '0': 'numpad_0', '1': 'numpad_1', '2': 'numpad_2',
+                '3': 'numpad_3', '4': 'numpad_4', '5': 'numpad_5',
+                '6': 'numpad_6', '7': 'numpad_7', '8': 'numpad_8',
+                '9': 'numpad_9',
+                'decimal': 'numpad_decimal', 'add': 'numpad_add',
+                'subtract': 'numpad_subtract', 'multiply': 'numpad_multiply',
+                'divide': 'numpad_divide',
             }
 
             def on_press(key):
@@ -4768,14 +4791,50 @@ class RemoteDesktopViewer:
                     if any(k in self._pynput_keys for k in ('shift', 'shift_l', 'shift_r')):
                         mods.append('shift')
 
-                    # 发送按键到远程
-                    if hasattr(key, 'char') and key.char:
+                    # 检测小键盘：通过pynput的vk属性判断
+                    numpad_key = None
+                    if hasattr(key, 'vk') and key.vk is not None:
+                        vk = key.vk
+                        if 0x60 <= vk <= 0x69:
+                            numpad_key = 'numpad_' + str(vk - 0x60)
+                        elif vk == 0x6E: numpad_key = 'numpad_decimal'
+                        elif vk == 0x6A: numpad_key = 'numpad_multiply'
+                        elif vk == 0x6B: numpad_key = 'numpad_add'
+                        elif vk == 0x6C: numpad_key = 'enter'
+                        elif vk == 0x6D: numpad_key = 'numpad_subtract'
+                        elif vk == 0x6F: numpad_key = 'numpad_divide'
+                    
+                    if numpad_key:
+                        if mods:
+                            self._send_input({"input_type": "key_hotkey", "keys": mods + [numpad_key]})
+                        else:
+                            self._send_input({"input_type": "key_press", "key": numpad_key})
+                    # 非小键盘按键
+
+                    elif hasattr(key, 'char') and key.char:
                         ch = key.char
                         # Ctrl按住时char变成控制字符，需要转回字母
                         if mods and ord(ch) < 32 and ord(ch) >= 1:
                             ch = chr(ord(ch) - 1 + ord('a'))  # →'c', →'v'等
                         if mods:
                             self._send_input({"input_type": "key_hotkey", "keys": mods + [ch]})
+                            # Ctrl+C: 同步本地剪贴板到远程
+                            if 'ctrl' in mods and ch in ('c', 'C'):
+                                try:
+                                    clip = self.win.clipboard_get()
+                                    if clip:
+                                        self._send_input({"input_type": "set_clipboard", "text": str(clip)})
+                                except:
+                                    pass
+                            # Ctrl+V: 先同步远程剪贴板到本地
+                            if 'ctrl' in mods and ch in ('v', 'V'):
+                                try:
+                                    clip_text = self._get_remote_clipboard()
+                                    if clip_text:
+                                        self.win.clipboard_clear()
+                                        self.win.clipboard_append(clip_text)
+                                except:
+                                    pass
                         else:
                             self._send_input({"input_type": "key_press", "key": ch})
                     elif hasattr(key, 'name') and key.name:

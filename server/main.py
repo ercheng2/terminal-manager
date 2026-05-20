@@ -4306,19 +4306,114 @@ class RemoteDesktopViewer:
 
 
 
+    def _read_local_clipboard(self):
+        """读取本地剪贴板，返回dict: {clip_type, text} 或 {clip_type, files}"""
+        import ctypes
+        import base64
+        import os
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        shell32 = ctypes.windll.shell32
+        result = {}
+        try:
+            if user32.OpenClipboard(0):
+                # 优先检测文件（CF_HDROP=15）
+                hDrop = user32.GetClipboardData(15)
+                if hDrop:
+                    count = shell32.DragQueryFileW(hDrop, 0xFFFFFFFF, None, 0)
+                    file_list = []
+                    for idx in range(count):
+                        length = shell32.DragQueryFileW(hDrop, idx, None, 0) + 1
+                        buf = ctypes.create_unicode_buffer(length)
+                        shell32.DragQueryFileW(hDrop, idx, buf, length)
+                        fpath = buf.value
+                        # 限制单文件10MB
+                        if os.path.isfile(fpath) and os.path.getsize(fpath) <= 10*1024*1024:
+                            with open(fpath, 'rb') as f:
+                                content = base64.b64encode(f.read()).decode('ascii')
+                            file_list.append({'name': os.path.basename(fpath), 'content': content})
+                        elif os.path.isfile(fpath):
+                            file_list.append({'name': os.path.basename(fpath), 'content': '', 'error': 'too_large'})
+                    if file_list:
+                        result = {'clip_type': 'files', 'files': file_list}
+                    user32.CloseClipboard()
+                    return result
+                # 没有文件，检测文本
+                hClip = user32.GetClipboardData(13)  # CF_UNICODETEXT
+                if hClip:
+                    pClip = user32.GlobalLock(hClip)
+                    text = ctypes.c_wchar_p(pClip).value or ''
+                    user32.GlobalUnlock(hClip)
+                    if text:
+                        result = {'clip_type': 'text', 'text': text}
+                user32.CloseClipboard()
+        except:
+            pass
+        return result
+
+    def _write_local_clipboard(self, clip_data):
+        """写入本地剪贴板（文本或文件）"""
+        import ctypes
+        import base64
+        import os
+        import tempfile
+        import struct
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        clip_type = clip_data.get('clip_type', '')
+        try:
+            if clip_type == 'text' and clip_data.get('text'):
+                text = clip_data['text']
+                self.win.clipboard_clear()
+                self.win.clipboard_append(text)
+            elif clip_type == 'files' and clip_data.get('files'):
+                saved_paths = []
+                tmp_dir = os.path.join(tempfile.gettempdir(), 'RemoteDesktop')
+                os.makedirs(tmp_dir, exist_ok=True)
+                for finfo in clip_data['files']:
+                    fname = finfo.get('name', 'unknown')
+                    fcontent = finfo.get('content', '')
+                    if fcontent and not finfo.get('error'):
+                        fpath = os.path.join(tmp_dir, fname)
+                        with open(fpath, 'wb') as f:
+                            f.write(base64.b64decode(fcontent))
+                        saved_paths.append(fpath)
+                if saved_paths:
+                    # 设置CF_HDROP剪贴板
+                    if user32.OpenClipboard(0):
+                        user32.EmptyClipboard()
+                        files_str = chr(0).join(saved_paths) + chr(0) + chr(0)
+                        files_bytes = files_str.encode('utf-16le')
+                        offset = 20  # DROPFILES结构大小
+                        total_size = offset + len(files_bytes)
+                        hMem = kernel32.GlobalAlloc(0x0042, total_size)
+                        pMem = kernel32.GlobalLock(hMem)
+                        # DROPFILES头
+                        struct.pack_into('I', pMem, 0, 20)  # pFiles偏移
+                        struct.pack_into('I', pMem, 4, 0)   # pt.x
+                        struct.pack_into('I', pMem, 8, 0)   # pt.y
+                        struct.pack_into('I', pMem, 12, 0)  # fNC
+                        struct.pack_into('I', pMem, 16, 1)  # fWide=TRUE
+                        ctypes.cdll.msvcrt.memcpy(pMem + offset, files_bytes, len(files_bytes))
+                        kernel32.GlobalUnlock(hMem)
+                        user32.SetClipboardData(15, hMem)  # CF_HDROP
+                        user32.CloseClipboard()
+        except:
+            pass
+
     def _get_remote_clipboard(self):
-        """从远程客户端获取剪贴板内容"""
+        """从远程客户端获取剪贴板内容（文本或文件）"""
         import http.client
         try:
-            conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=2)
+            conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=5)
             data = json.dumps({'input_type': 'get_clipboard'}).encode('utf-8')
             conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
             resp = conn.getresponse()
             resp_data = json.loads(resp.read().decode('utf-8'))
             conn.close()
-            return resp_data.get('clipboard', '')
+            return resp_data.get('clipboard', {})
         except:
-            return ''
+            return {}
 
     def _send_input(self, input_data):
 
@@ -4821,18 +4916,17 @@ class RemoteDesktopViewer:
                             # Ctrl+C: 同步本地剪贴板到远程
                             if 'ctrl' in mods and ch in ('c', 'C'):
                                 try:
-                                    clip = self.win.clipboard_get()
-                                    if clip:
-                                        self._send_input({"input_type": "set_clipboard", "text": str(clip)})
+                                    clip_data = self._read_local_clipboard()
+                                    if clip_data:
+                                        self._send_input({"input_type": "set_clipboard", **clip_data})
                                 except:
                                     pass
                             # Ctrl+V: 先同步远程剪贴板到本地
                             if 'ctrl' in mods and ch in ('v', 'V'):
                                 try:
-                                    clip_text = self._get_remote_clipboard()
-                                    if clip_text:
-                                        self.win.clipboard_clear()
-                                        self.win.clipboard_append(clip_text)
+                                    clip_data = self._get_remote_clipboard()
+                                    if clip_data:
+                                        self._write_local_clipboard(clip_data)
                                 except:
                                     pass
                         else:

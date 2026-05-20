@@ -1096,7 +1096,7 @@ _last_screen_hash = None
 _last_screen_jpeg = None
 _screen_quality = 95
 
-_pending_clipboard = ''
+_pending_clipboard = {}
 
 def _execute_input(input_data):
     """执行单条输入指令"""
@@ -1219,38 +1219,95 @@ def _execute_input(input_data):
                     if ord(ch) < 128:
                         pyautogui.press(ch, _pause=False)
     elif input_type == 'set_clipboard':
-        text = input_data.get('text', '')
-        if text:
-            try:
-                import ctypes
-                CF_UNICODETEXT = 13
-                kernel32 = ctypes.windll.kernel32
-                user32 = ctypes.windll.user32
-                if user32.OpenClipboard(0):
+        clip_type = input_data.get('clip_type', 'text')
+        try:
+            import ctypes
+            import base64
+            import os
+            import tempfile
+            import struct
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            if clip_type == 'text':
+                text = input_data.get('text', '')
+                if text and user32.OpenClipboard(0):
                     user32.EmptyClipboard()
                     data = text.encode('utf-16le') + b'\x00\x00'
                     hMem = kernel32.GlobalAlloc(0x0042, len(data))
                     pMem = kernel32.GlobalLock(hMem)
                     ctypes.cdll.msvcrt.memcpy(pMem, data, len(data))
                     kernel32.GlobalUnlock(hMem)
-                    user32.SetClipboardData(CF_UNICODETEXT, hMem)
+                    user32.SetClipboardData(13, hMem)  # CF_UNICODETEXT
                     user32.CloseClipboard()
-            except:
-                pass
+            elif clip_type == 'files':
+                file_list = input_data.get('files', [])
+                saved_paths = []
+                tmp_dir = os.path.join(tempfile.gettempdir(), 'RemoteDesktop')
+                os.makedirs(tmp_dir, exist_ok=True)
+                for finfo in file_list:
+                    fname = finfo.get('name', 'unknown')
+                    fcontent = finfo.get('content', '')
+                    if fcontent and not finfo.get('error'):
+                        fpath = os.path.join(tmp_dir, fname)
+                        with open(fpath, 'wb') as f:
+                            f.write(base64.b64decode(fcontent))
+                        saved_paths.append(fpath)
+                if saved_paths and user32.OpenClipboard(0):
+                    user32.EmptyClipboard()
+                    files_str = chr(0).join(saved_paths) + chr(0) + chr(0)
+                    files_bytes = files_str.encode('utf-16le')
+                    offset = 20  # DROPFILES
+                    total_size = offset + len(files_bytes)
+                    hMem = kernel32.GlobalAlloc(0x0042, total_size)
+                    pMem = kernel32.GlobalLock(hMem)
+                    struct.pack_into('I', pMem, 0, 20)
+                    struct.pack_into('I', pMem, 4, 0)
+                    struct.pack_into('I', pMem, 8, 0)
+                    struct.pack_into('I', pMem, 12, 0)
+                    struct.pack_into('I', pMem, 16, 1)  # fWide
+                    ctypes.cdll.msvcrt.memcpy(pMem + offset, files_bytes, len(files_bytes))
+                    kernel32.GlobalUnlock(hMem)
+                    user32.SetClipboardData(15, hMem)  # CF_HDROP
+                    user32.CloseClipboard()
+        except:
+            pass
     elif input_type == 'get_clipboard':
         global _pending_clipboard
-        _pending_clipboard = ''
+        _pending_clipboard = {}
         try:
             import ctypes
+            import base64
+            import os
             user32 = ctypes.windll.user32
+            shell32 = ctypes.windll.shell32
             if user32.OpenClipboard(0):
-                hClip = user32.GetClipboardData(13)
-                if hClip:
-                    pClip = user32.GlobalLock(hClip)
-                    text = ctypes.c_wchar_p(pClip).value
-                    user32.GlobalUnlock(hClip)
-                    _pending_clipboard = text or ''
-                user32.CloseClipboard()
+                # 优先检测文件
+                hDrop = user32.GetClipboardData(15)  # CF_HDROP
+                if hDrop:
+                    count = shell32.DragQueryFileW(hDrop, 0xFFFFFFFF, None, 0)
+                    file_list = []
+                    for idx in range(count):
+                        length = shell32.DragQueryFileW(hDrop, idx, None, 0) + 1
+                        buf = ctypes.create_unicode_buffer(length)
+                        shell32.DragQueryFileW(hDrop, idx, buf, length)
+                        fpath = buf.value
+                        if os.path.isfile(fpath) and os.path.getsize(fpath) <= 10*1024*1024:
+                            with open(fpath, 'rb') as f:
+                                content = base64.b64encode(f.read()).decode('ascii')
+                            file_list.append({'name': os.path.basename(fpath), 'content': content})
+                    if file_list:
+                        _pending_clipboard = {'clip_type': 'files', 'files': file_list}
+                    user32.CloseClipboard()
+                else:
+                    # 检测文本
+                    hClip = user32.GetClipboardData(13)
+                    if hClip:
+                        pClip = user32.GlobalLock(hClip)
+                        text = ctypes.c_wchar_p(pClip).value or ''
+                        user32.GlobalUnlock(hClip)
+                        if text:
+                            _pending_clipboard = {'clip_type': 'text', 'text': text}
+                    user32.CloseClipboard()
         except:
             pass
     elif input_type == 'set_quality':

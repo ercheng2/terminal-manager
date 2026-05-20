@@ -3594,14 +3594,12 @@ class RemoteDesktopViewer:
         self._notify_quality()
         
         while self.running:
-            # 直接尝试TCP流模式（_fetch_via_tcp内部会连接）
             try:
                 self._fetch_via_tcp()
                 return
             except:
                 pass
             
-            # TCP不可用，用HTTP模式
             self._fetch_via_http()
             return
 
@@ -3654,6 +3652,7 @@ class RemoteDesktopViewer:
 
 
                 self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
+                print('[远程桌面] TCP流已连接5902')
 
 
 
@@ -3749,6 +3748,7 @@ class RemoteDesktopViewer:
 
                     # 传入帧数据给解码线程，包含帧类型和区域信息
                     self._raw_frame = frame_data
+                    print(f'[远程桌面] 收到帧 type={frame_type} {fw}x{fh} jpeg={jpeg_len}B')
                     self._frame_event.set()
 
 
@@ -3987,6 +3987,7 @@ class RemoteDesktopViewer:
 
 
                     self._latest_img = img
+                    print(f'[远程桌面] 解码完成 {img.size}')
 
 
     def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):

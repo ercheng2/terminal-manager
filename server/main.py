@@ -3986,32 +3986,7 @@ class RemoteDesktopViewer:
 
 
 
-                    # 把PhotoImage创建也放后台，减少主线程负担
-
-
-
-                    try:
-
-
-
-                        photo = ImageTk.PhotoImage(img)
-
-
-
-                        self._latest_photo = (photo, self.offset_x, self.offset_y)
-
-
-
-                    except:
-
-
-
-                        self._latest_img = img
-
-
-
-    
-
+                    self._latest_img = img
 
 
     def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):

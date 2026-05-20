@@ -3657,6 +3657,7 @@ class RemoteDesktopViewer:
                 sock.settimeout(3)
 
                 self.win.after(0, lambda: self.status_var.set('已连接(流模式)'))
+                print('[RD] TCP connected 5902')
 
                 
                 # 重置增量帧状态
@@ -3721,6 +3722,7 @@ class RemoteDesktopViewer:
                     
                     # 收到帧数据，存入解码队列（包含帧类型和位置信息）
                     self._raw_frame = (frame_type, x, y, w, h, frame_data)
+                    print(f'[RD] frame: type={frame_type} pos=({x},{y}) {w}x{h} jpeg={jpeg_len}')
                     self._frame_event.set()
 
 
@@ -3915,6 +3917,7 @@ class RemoteDesktopViewer:
                 
                 if img:
                     self._latest_img = img
+                    print(f'[RD] decoded: {img.size}')
 
     def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):
         """解码并应用帧 - 支持增量更新"""
@@ -4012,6 +4015,7 @@ class RemoteDesktopViewer:
             try:
                 self.current_photo = ImageTk.PhotoImage(img)
                 self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+                print('[RD] displayed')
                 self.canvas.coords(self._canvas_img_id, self.offset_x, self.offset_y)
             except Exception as e:
                 pass
@@ -4055,6 +4059,7 @@ class RemoteDesktopViewer:
 
 
             self.canvas.itemconfig(self._canvas_img_id, image=self.current_photo)
+            print('[RD] displayed')
 
 
 

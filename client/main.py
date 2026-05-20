@@ -1207,8 +1207,7 @@ def _execute_input(input_data):
                         if ord(ch) < 128:
                             pyautogui.press(ch, _pause=False)
         elif input_type == 'set_quality':
-            global _screen_quality
-            _screen_quality = input_data.get('quality', 50)
+            globals().__setitem__('_screen_quality', input_data.get('quality', 50))
     else:
         # Linux: 使用 xdotool
         def _xdo(cmd):
@@ -1268,8 +1267,7 @@ def _execute_input(input_data):
                 escaped = text.replace("'", "'\"'\"'")
                 _xdo(f'xdotool type --delay 10 "{escaped}"')
         elif input_type == 'set_quality':
-            global _screen_quality
-            _screen_quality = input_data.get('quality', 50)
+            globals().__setitem__('_screen_quality', input_data.get('quality', 50))
 
 class ScreenHandler(BaseHTTPRequestHandler):
     """截屏HTTP请求处理器"""

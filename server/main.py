@@ -3464,6 +3464,7 @@ class RemoteDesktopViewer:
 
 
         self._raw_frame = None  # 收到的JPEG原始数据（收帧线程写入，解码线程读取）
+        self._current_screen_img = None  # 当前完整屏幕Image，用于增量更新
 
 
 
@@ -3826,44 +3827,29 @@ class RemoteDesktopViewer:
                     
 
 
-
-                    frame_data = bytearray()
-
-
-
-                    while len(frame_data) < frame_len and self.running:
-
-
-
-                        try:
-
-
-
-                            chunk = sock.recv(min(frame_len - len(frame_data), 262144))
-
-
-
+                    # recv_exact 辅助函数
+                    def recv_exact(sock, n):
+                        data = bytearray()
+                        while len(data) < n:
+                            chunk = sock.recv(n - len(data))
                             if not chunk:
-
-
-
-                                raise ConnectionError()
-
-
-
-                            frame_data.extend(chunk)
-
-
-
-                        except socket.timeout:
-
-
-
-                            continue
-
-
-
-                    frame_data = bytes(frame_data)
+                                raise ConnectionError("Connection closed")
+                            data.extend(chunk)
+                        return bytes(data)
+                    
+                    # 读21字节帧头
+                    frame_header = recv_exact(sock, 21)
+                    frame_type, x, y, fw, fh, jpeg_len = struct.unpack('!B4II', frame_header)
+                    
+                    if frame_type == 2:
+                        # 心跳，跳过
+                        continue
+                    
+                    if jpeg_len > 10 * 1024 * 1024:
+                        raise ValueError("JPEG too large")
+                    
+                    jpeg_data = recv_exact(sock, jpeg_len)
+                    frame_data = (frame_type, x, y, fw, fh, jpeg_data)
 
 
 
@@ -3927,7 +3913,9 @@ class RemoteDesktopViewer:
 
 
 
+                    # 传入帧数据给解码线程，包含帧类型和区域信息
                     self._raw_frame = frame_data
+                    self._frame_event.set()
 
 
 
@@ -4155,7 +4143,12 @@ class RemoteDesktopViewer:
 
 
 
-                img = self._decode_and_scale(raw)
+                if isinstance(raw, tuple) and len(raw) == 6:
+                    frame_type, x, y, fw, fh, jpeg_data = raw
+                    img = self._decode_and_apply(frame_type, x, y, fw, fh, jpeg_data)
+                else:
+                    # 兼容旧格式：raw 是纯 jpeg_data
+                    img = self._decode_and_apply(0, 0, 0, 0, 0, raw)
 
 
 
@@ -4191,166 +4184,62 @@ class RemoteDesktopViewer:
 
 
 
-    def _decode_and_scale(self, jpeg_data):
-
-
-
-        """后台线程：JPEG解码+缩放（draft降采样+resize补齐）"""
-
-
-
+    def _decode_and_apply(self, frame_type, x, y, fw, fh, jpeg_data):
+        """解码并应用帧 - 支持增量更新
+        frame_type: 0=全帧, 1=部分更新, 2=心跳(不调用此函数)
+        """
         try:
-
-
-
             img = Image.open(io.BytesIO(jpeg_data))
-
-
-
-            iw, ih = img.size  # 原始尺寸
-
-
-
+            
+            # 初始化或处理全帧
+            if frame_type == 0:
+                # 全帧，解码后直接作为当前屏幕
+                self._current_screen_img = img.copy()
+            elif frame_type == 1:
+                # 部分更新，将区域paste到当前屏幕
+                if self._current_screen_img is None:
+                    # 还没有全帧数据，暂存区域
+                    self._current_screen_img = img.copy()
+                    return None
+                # 粘贴区域到当前屏幕
+                self._current_screen_img.paste(img, (x, y))
+            
+            # 对完整屏幕图像进行缩放
+            iw, ih = self._current_screen_img.size
             cw, ch = self._canvas_size
-
-
-
             
-
-
-
             if cw > 100 and ch > 100:
-
-
-
                 self.screen_scale = min(cw / iw, ch / ih)
-
-
-
                 new_w = int(iw * self.screen_scale)
-
-
-
                 new_h = int(ih * self.screen_scale)
-
-
-
                 
-
-
-
                 need_scale = abs(new_w - iw) > iw * 0.02 or abs(new_h - ih) > ih * 0.02
-
-
-
                 
-
-
-
                 if need_scale:
-
-
-
-                    # 尝试draft（JPEG解码阶段降采样，快5-8倍，但只支持2的幂次缩小）
-
-
-
+                    # 尝试draft降采样
                     drafted = False
-
-
-
                     try:
-
-
-
-                        img.draft('RGB', (new_w, new_h))
-
-
-
-                        img.load()
-
-
-
-                        dw, dh = img.size
-
-
-
-                        # draft成功且尺寸确实变小了
-
-
-
+                        self._current_screen_img.draft('RGB', (new_w, new_h))
+                        self._current_screen_img.load()
+                        dw, dh = self._current_screen_img.size
                         if dw < iw or dh < ih:
-
-
-
                             drafted = True
-
-
-
-                            # draft后可能还需微调（draft只做2x/4x缩小）
-
-
-
                             if abs(dw - new_w) > 2 or abs(dh - new_h) > 2:
-
-
-
-                                img = img.resize((new_w, new_h), Image.BILINEAR)
-
-
-
+                                self._current_screen_img = self._current_screen_img.resize((new_w, new_h), Image.BILINEAR)
                     except:
-
-
-
                         pass
-
-
-
                     
-
-
-
                     if not drafted:
-
-
-
-                        img = img.resize((new_w, new_h), Image.BILINEAR)
-
-
-
+                        self._current_screen_img = self._current_screen_img.resize((new_w, new_h), Image.BILINEAR)
                 
-
-
-
                 self.offset_x = (cw - new_w) // 2
-
-
-
                 self.offset_y = (ch - new_h) // 2
-
-
-
-            
-
-
-
-            return img
-
-
-
+                return self._current_screen_img
+            else:
+                return self._current_screen_img
+                
         except:
-
-
-
             return None
-
-
-
-    
-
-
-
     def _poll_display(self):
 
 
@@ -4660,205 +4549,97 @@ class RemoteDesktopViewer:
 
 
     def _input_sender(self):
-
-
-
-        """输入发送线程——批量合并指令，HTTP长连接复用"""
-
-
-
+        """输入发送线程——优先TCP(5903)，失败后HTTP备用"""
+        import socket
+        import json
         import http.client
-
-
-
-        conn = None
-
-
-
+        
+        tcp_conn = None
+        http_conn = None
+        tcp_fail_count = 0
+        use_tcp = True
+        
         while self.running:
-
-
-
             try:
-
-
-
                 # 批量取出队列中的指令
-
-
-
                 batch = []
-
-
-
+                
                 try:
-
-
-
                     item = self._input_queue.get(timeout=0.001)
-
-
-
                     batch.append(item)
-
-
-
                 except queue.Empty:
-
-
-
-                    continue  # 保持连接
-
-
-
+                    continue
                 
-
-
-
-                # 非阻塞取出剩余（最多10ms内积压的）
-
-
-
+                # 非阻塞取出剩余（最多2ms内积压的）
                 deadline = time.time() + 0.002
-
-
-
                 while not self._input_queue.empty() and len(batch) < 20 and time.time() < deadline:
-
-
-
                     try:
-
-
-
                         batch.append(self._input_queue.get_nowait())
-
-
-
                     except queue.Empty:
-
-
-
                         break
-
-
-
                 
-
-
-
                 # 去重：mouse_move/mouse_drag只保留最后一条
-
-
-
                 deduped = {}
-
-
-
                 for item in batch:
-
-
-
                     itype = item.get('input_type', '')
-
-
-
                     if itype in ('mouse_move', 'mouse_drag'):
-
-
-
                         deduped[itype] = item
-
-
-
                     else:
-
-
-
                         deduped[f'{itype}_{len(deduped)}'] = item
-
-
-
                 
-
-
-
-                # 合并为一次HTTP请求发送（减少TCP连接开销）
-
-
-
                 items = list(deduped.values())
-
-
-
-                try:
-
-
-
-                    if not conn:
-
-
-
-                        conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
-
-
-
-                    data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
-
-
-
-                    conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
-
-
-
-                    resp = conn.getresponse()
-
-
-
-                    resp.read()  # 必须读完response才能复用连接
-
-
-
-                except:
-
-
-
-                    # 连接断开，重建
-
-
-
+                
+                # 优先使用TCP
+                if use_tcp:
                     try:
-
-
-
-                        conn.close()
-
-
-
+                        if tcp_conn is None:
+                            tcp_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            tcp_conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                            tcp_conn.settimeout(1)
+                            tcp_conn.connect((self.client_ip, 5903))
+                            print('[远程桌面] TCP输入已连接')
+                        
+                        # 批量发送，每条一行JSON
+                        for item in items:
+                            data = json.dumps(item, ensure_ascii=False) + '\n'
+                            tcp_conn.sendall(data.encode('utf-8'))
+                        
+                        tcp_fail_count = 0
+                        continue
+                        
+                    except Exception as e:
+                        tcp_fail_count += 1
+                        if tcp_fail_count >= 5:
+                            use_tcp = False
+                            print('[远程桌面] TCP输入失败，切换到HTTP模式')
+                        
+                        if tcp_conn:
+                            try:
+                                tcp_conn.close()
+                            except:
+                                pass
+                            tcp_conn = None
+                
+                # HTTP备用模式
+                try:
+                    if http_conn is None:
+                        http_conn = http.client.HTTPConnection(self.client_ip, 5901, timeout=3)
+                    
+                    data = json.dumps({'input_type': 'batch', 'items': items}).encode('utf-8')
+                    http_conn.request('POST', '/input', body=data, headers={'Content-Type': 'application/json'})
+                    resp = http_conn.getresponse()
+                    resp.read()
+                    
+                except:
+                    try:
+                        if http_conn:
+                            http_conn.close()
                     except:
-
-
-
                         pass
-
-
-
-                    conn = None
-
-
-
+                    http_conn = None
+                    
             except:
-
-
-
                 pass
-
-
-
-    
-
-
-
     def _on_mouse_press(self, event):
 
 

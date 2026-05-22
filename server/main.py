@@ -34,7 +34,7 @@ v1.4.0: 添加远程桌面控制功能
 
 
 
-import os, sys, json, time, datetime, uuid, threading, io, queue, struct
+import os, sys, json, time, datetime, uuid, threading, io, queue, struct, socket
 
 
 
@@ -476,6 +476,67 @@ _load_persistent()
 
 
 
+
+
+
+def _send_wol(mac_address, broadcast_ip='255.255.255.255', port=9):
+    """发送 Wake-on-LAN Magic Packet 唤醒目标设备
+    
+    原理：WOL Magic Packet = 6字节0xFF + 目标MAC地址重复16次
+    通过UDP广播发送到目标子网，目标网卡收到后开机
+    
+    前提条件：
+    1. 目标电脑 BIOS/UEFI 中开启了 WOL (Wake on LAN) 功能
+    2. 目标电脑网卡属性中开启了"唤醒魔术包"
+    3. 目标电脑处于关机/休眠状态但网卡仍供电（通常需要插电源）
+    """
+    try:
+        # 清理MAC地址格式
+        mac_clean = mac_address.replace(':', '').replace('-', '').replace('.', '').strip()
+        if len(mac_clean) != 12:
+            return False, f'无效MAC地址长度: {mac_clean}'
+        
+        mac_bytes = bytes.fromhex(mac_clean)
+        
+        # 构造 Magic Packet: 6字节0xFF + MAC重复16次 = 102字节
+        magic_packet = b'\xff' * 6 + mac_bytes * 16
+        
+        # 发送3次提高可靠性
+        sent_count = 0
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(1)
+        
+        try:
+            for _ in range(3):
+                sock.sendto(magic_packet, (broadcast_ip, port))
+                sent_count += 1
+                time.sleep(0.1)
+            
+            # 同时发送到有限广播地址
+            if broadcast_ip != '255.255.255.255':
+                sock.sendto(magic_packet, ('255.255.255.255', port))
+                sent_count += 1
+        finally:
+            sock.close()
+        
+        return True, f'Magic Packet已发送({sent_count}次) 到 {mac_address}'
+        
+    except Exception as e:
+        return False, f'发送失败: {e}'
+
+
+def _get_broadcast_ip(ip_address):
+    """根据IP地址推断广播地址（C类网简单推断）"""
+    try:
+        parts = ip_address.split('.')
+        if len(parts) == 4:
+            # 简单推断：C类网 x.x.x.255
+            return f'{parts[0]}.{parts[1]}.{parts[2]}.255'
+    except:
+        pass
+    return '255.255.255.255'
 
 
 def _save_persistent():
@@ -1055,6 +1116,37 @@ async def send_command(request: Request):
 
 
     return {'task_ids': results}
+
+
+
+@app.post('/api/wol')
+async def wake_on_lan(request: Request):
+    """远程开机 - 发送 WOL Magic Packet"""
+    body = await request.json()
+    target_ids = body.get('target_ids', [])
+    
+    if not target_ids:
+        return {'success': False, 'message': '请指定目标设备'}
+    
+    results = {}
+    for target_id in target_ids:
+        if target_id not in _clients:
+            results[target_id] = {'success': False, 'message': '设备未注册'}
+            continue
+        
+        mac = _clients[target_id].get('mac', '')
+        ip = _clients[target_id].get('ip', '')
+        
+        if not mac or mac == '未知':
+            results[target_id] = {'success': False, 'message': '设备无MAC地址，无法远程开机'}
+            continue
+        
+        broadcast_ip = _get_broadcast_ip(ip)
+        ok, msg = _send_wol(mac, broadcast_ip)
+        results[target_id] = {'success': ok, 'message': msg}
+    
+    return {'results': results}
+
 
 
 
@@ -2434,6 +2526,10 @@ select, input[type="text"] { padding: 6px 10px; border: 1px solid #ddd; border-r
 
 
 
+            <button class="btn btn-success" onclick="sendWol()">远程开机</button>
+
+
+
             <button class="btn btn-primary" onclick="sendCmd('mute')">静音</button>
 
 
@@ -2770,6 +2866,32 @@ function updateSelection() {
 
 
 
+        function sendWol() {
+            if (selectedDevices.length === 0) {
+                alert('请选择要开机的设备');
+                return;
+            }
+            if (!confirm('确定要远程唤醒选中的设备？\n前提: 目标电脑BIOS已开启WOL且网卡供电正常')) return;
+            
+            fetch('/api/wol', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({target_ids: selectedDevices})
+            })
+            .then(r => r.json())
+            .then(data => {
+                let msgs = [];
+                if (data.results) {
+                    for (let id in data.results) {
+                        let r = data.results[id];
+                        msgs.push(r.success ? '✅ ' + r.message : '❌ ' + r.message);
+                    }
+                }
+                alert(msgs.join('\n'));
+            })
+            .catch(e => alert('远程开机请求失败: ' + e));
+        }
+
 function sendCmd(cmd) {
 
 
@@ -2996,7 +3118,7 @@ html,body{width:1920px;height:1080px;overflow:hidden;font-family:"Microsoft YaHe
 <div class="cr"><button class="cb gn w3" onclick="sc('remote_desktop')">远程桌面</button></div>
 <div class="cr"><button class="cb dg" onclick="sc('shutdown')">关机</button><button class="cb wn" onclick="sc('restart')">重启</button><button class="cb" onclick="sc('mute')">静音</button></div>
 <div class="cr"><button class="cb" onclick="sc('unmute')">取消静音</button><button class="cb" onclick="sc('volume:up')">音量+</button><button class="cb" onclick="sc('volume:down')">音量-</button></div>
-<div class="cr"><button class="cb w3" onclick="sc('status')">查询状态</button></div>
+<div class="cr"><button class="cb gn" onclick="sc('wol')">远程开机</button><button class="cb w3" onclick="sc('status')">查询状态</button></div>
 </div></div>
 <div class="fa"><div class="fc">
 <div class="fw"><input class="fi" id="fP" placeholder="未选择文件" readonly><button class="fj" onclick="document.getElementById('fI').click()">选择文件</button><input type="file" id="fI" style="display:none" onchange="document.getElementById('fP').value=this.files[0]?this.files[0].name:''"></div>
@@ -3015,7 +3137,7 @@ function sd(id){sid=id;si(id);rd()}
 function si(id){var d=D.find(function(x){return x.id===id});if(!d){document.getElementById("nD").style.display="";document.getElementById("dD").style.display="none";return}document.getElementById("nD").style.display="none";document.getElementById("dD").style.display="";document.getElementById("dH").textContent=d.hostname||"-";document.getElementById("dI").textContent=d.ip||"-";document.getElementById("dM").textContent=d.mac||"-";document.getElementById("dO").textContent=d.os||"-";document.getElementById("dV").textContent=d.os_version||"-";document.getElementById("dA").textContent=d.arch||"-";document.getElementById("dL2").textContent=d.last_seen||"-";document.getElementById("dS").textContent=d.status==="online"?"在线":"离线";sp("c",d.cpu_percent);sp("m",d.memory_percent);sp("k",d.disk_percent)}
 function sp(p,v){v=parseFloat(v)||0;document.getElementById(p+"V").textContent=v.toFixed(1)+"%";document.getElementById(p+"B").style.width=v+"%";document.getElementById(p+"B").className="pf "+(v>80?"fr":v>50?"fy":"fg")}
 function dd(id){if(!confirm("确定删除该设备？"))return;fetch("/api/devices/"+id,{method:"DELETE"}).then(function(){rf()})}
-function sc(cmd){if(!sid){alert("请先选择设备");return}fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_ids:[sid],cmd:cmd})}).then(function(r){return r.json()}).then(function(){setTimeout(rf,1500)})}
+function sc(cmd){if(!sid){alert("请先选择设备");return}if(cmd==="wol"){fetch("/api/wol",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_ids:[sid]})}).then(function(r){return r.json()}).then(function(d){var m="";if(d.results){for(var k in d.results){m+=d.results[k].message+"\n"}}alert(m||"已发送");setTimeout(rf,3000)})}else{fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_ids:[sid],cmd:cmd})}).then(function(r){return r.json()}).then(function(){setTimeout(rf,1500)})}}
 function sf(){if(!sid){alert("请先选择设备");return}var f=document.getElementById("fI").files[0];if(!f){alert("请选择文件");return}document.getElementById("fS").textContent="上传中...";document.getElementById("fS").style.color="#ffaa33";var fd=new FormData();fd.append("file",f);fetch("/api/file/upload",{method:"POST",body:fd}).then(function(r){return r.json()}).then(function(d){if(d.filename)return fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_ids:[sid],cmd:"download:"+d.filename+":"+f.name})})}).then(function(){document.getElementById("fS").textContent="发送成功";document.getElementById("fS").style.color="#00ff88";document.getElementById("fL").innerHTML+="<div>"+new Date().toLocaleTimeString()+" -> "+f.name+"</div>";setTimeout(function(){document.getElementById("fS").textContent="就绪";document.getElementById("fS").style.color="#00ff88"},3000)}).catch(function(){document.getElementById("fS").textContent="发送失败";document.getElementById("fS").style.color="#ff4466"})}
 document.getElementById("sA").textContent=ip();rf();setInterval(rf,3000);
 </script>
@@ -5278,7 +5400,7 @@ class ServerGUI:
 
 
 
-        self.root.title('坤展成终端管理系统 v1.3-53 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.4.0 - 服务器端')
 
 
 
@@ -5915,6 +6037,10 @@ class ServerGUI:
 
 
             ('音量-', '#3498db', self._cmd_volume_down),
+
+
+
+            ('远程开机', '#2ecc71', self._cmd_wol),
 
 
 
@@ -7557,6 +7683,50 @@ class ServerGUI:
     
 
 
+
+
+    def _cmd_wol(self):
+
+        """远程开机 - 发送 WOL Magic Packet"""
+        if not self.selected_client_id:
+            self.cmd_status_var.set('⚠️ 请先选择设备')
+            self.cmd_status_label.config(fg='#f39c12')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+            return
+
+        if self.selected_client_id not in _clients:
+            self.cmd_status_var.set('❌ 设备不存在')
+            self.cmd_status_label.config(fg='#e74c3c')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+            return
+
+        device_info = _clients[self.selected_client_id]
+        mac = device_info.get('mac', '')
+        hostname = device_info.get('hostname', '')
+        ip = device_info.get('ip', '')
+
+        if not mac or mac == '未知':
+            self.cmd_status_var.set('❌ 该设备无MAC地址，无法远程开机')
+            self.cmd_status_label.config(fg='#e74c3c')
+            self.root.after(3000, lambda: self.cmd_status_var.set(''))
+            return
+
+        # 确认操作
+        if not messagebox.askyesno('远程开机确认',
+            f'确定要远程唤醒设备？\n\n主机名: {hostname}\nIP: {ip}\nMAC: {mac}\n\n前提: 目标电脑BIOS已开启WOL且网卡供电正常'):
+            return
+
+        broadcast_ip = _get_broadcast_ip(ip)
+        ok, msg = _send_wol(mac, broadcast_ip)
+
+        if ok:
+            self.cmd_status_var.set(f'✅ 远程开机指令已发送: {hostname} ({mac})')
+            self.cmd_status_label.config(fg='#27ae60')
+        else:
+            self.cmd_status_var.set(f'❌ 远程开机失败: {msg}')
+            self.cmd_status_label.config(fg='#e74c3c')
+
+        self.root.after(5000, lambda: self.cmd_status_var.set(''))
 
     def _gen_activation_key(self):
 

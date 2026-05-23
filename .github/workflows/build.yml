@@ -66,11 +66,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install pyinstaller
-        run: pip install pyinstaller
+        run: pip install pyinstaller==6.11.1
       - name: Build keygen exe
         run: |
           cd keygen
-          pyinstaller --name "KZC-KeyGen" --onefile --windowed --clean keygen.py
+          pyinstaller --name "KZC-KeyGen" --onefile --windowed --hidden-import=tkinter --hidden-import=tkinter.messagebox --hidden-import=hashlib --noupx --clean keygen.py
       - name: Upload keygen artifact
         uses: actions/upload-artifact@v4
         with:

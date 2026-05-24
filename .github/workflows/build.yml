@@ -70,7 +70,7 @@ jobs:
       - name: Build keygen exe
         run: |
           cd keygen
-          pyinstaller --name "KZC-KeyGen" --onefile --hidden-import=tkinter --hidden-import=tkinter.messagebox --hidden-import=hashlib --noupx --clean keygen.py
+          pyinstaller --name "KZC-KeyGen" --onefile --windowed --hidden-import=tkinter --hidden-import=tkinter.messagebox --hidden-import=hashlib --noupx --clean keygen.py
       - name: Upload keygen artifact
         uses: actions/upload-artifact@v4
         with:

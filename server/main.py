@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-坤展成终端管理系统 — 服务器端 v1.3-45
+坤展成终端管理系统 — 服务器端 v1.5.0
 基于HTTP轮询通信，更稳定可靠
-支持tkinter桌面GUI + 文件传输功能
-终极修复：StringVar改用.set()替代.config(text=)，加强异常捕获，诊断面板追加操作日志
+支持tkinter桌面GUI + 文件传输功能 + 电源管理（WOL自动开机/定时级联关机）
 """
 
-import os, sys, json, time, datetime, uuid, threading
+import os, sys, json, time, datetime, uuid, threading, struct, socket
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -45,6 +44,197 @@ def save_devices(data):
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+# ===== Wake-on-LAN & 电源管理 =====
+POWER_CFG_FILE = os.path.join(BASE_DIR, 'power_config.json')
+
+def load_power_config():
+    """加载电源管理配置"""
+    defaults = {
+        'wol_enabled': True,         # 启动时自动WOL开机
+        'wol_delay_sec': 5,          # 启动后延迟N秒发送WOL
+        'wol_repeat': 3,             # WOL包重复次数
+        'shutdown_time': '',         # 定时关机时间 HH:MM（空=不启用）
+        'shutdown_enabled': False,   # 是否启用定时关机
+    }
+    if os.path.exists(POWER_CFG_FILE):
+        try:
+            with open(POWER_CFG_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+                for k, v in defaults.items():
+                    if k not in cfg:
+                        cfg[k] = v
+                return cfg
+        except:
+            pass
+    return defaults
+
+def save_power_config(cfg):
+    """保存电源管理配置"""
+    with open(POWER_CFG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+_power_config = load_power_config()
+
+def send_wol(mac_str, broadcast_ip='255.255.255.255', port=9):
+    """发送 Wake-on-LAN 魔术包"""
+    try:
+        # 解析MAC地址（支持 xx:xx:xx:xx:xx:xx 和 xx-xx-xx-xx-xx-xx 格式）
+        mac_clean = mac_str.replace('-', ':').replace(' ', '').replace('.', '')
+        mac_bytes = bytes.fromhex(mac_clean.replace(':', ''))
+        if len(mac_bytes) != 6:
+            return False
+        # 构造魔术包：6个0xFF + MAC重复16次
+        magic = b'\xff' * 6 + mac_bytes * 16
+        # 发送UDP广播
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            for _ in range(_power_config.get('wol_repeat', 3)):
+                s.sendto(magic, (broadcast_ip, port))
+                time.sleep(0.1)
+        return True
+    except Exception as e:
+        print(f'[WOL] 发送失败 {mac_str}: {e}')
+        return False
+
+def wol_wake_all():
+    """向所有已知设备发送WOL开机包"""
+    clients_copy = dict(_clients)
+    macs_sent = []
+    for cid, info in clients_copy.items():
+        mac = info.get('mac', '')
+        if mac and len(mac.replace(':', '').replace('-', '')) == 12:
+            ok = send_wol(mac)
+            macs_sent.append(f'{info.get("hostname","?")} ({mac}): {"✓" if ok else "✗"}')
+    print(f'[WOL] 已发送WOL到 {len(macs_sent)} 台设备')
+    return macs_sent
+
+def _auto_wol_thread(gui_ref):
+    """启动后延迟自动WOL的线程"""
+    delay = _power_config.get('wol_delay_sec', 5)
+    if delay > 0:
+        time.sleep(delay)
+    if not _power_config.get('wol_enabled', False):
+        return
+    print(f'[WOL] 启动后自动唤醒（延迟{delay}秒）')
+    results = wol_wake_all()
+    # 通知GUI
+    if gui_ref:
+        try:
+            msg = f'WOL已发送到 {len(results)} 台设备'
+            gui_ref.root.after(0, lambda m=msg: gui_ref._append_diag(m))
+        except:
+            pass
+
+# ===== 定时关机线程 =====
+_shutdown_timer_thread = None
+_shutdown_timer_running = False
+
+def _shutdown_timer_loop(gui_ref):
+    """定时检查是否到达关机时间，到期后级联关机"""
+    global _shutdown_timer_running
+    _shutdown_timer_running = True
+    while _shutdown_timer_running:
+        cfg = _power_config  # 读取最新配置
+        if cfg.get('shutdown_enabled', False) and cfg.get('shutdown_time', ''):
+            now = datetime.datetime.now()
+            try:
+                h, m = map(int, cfg['shutdown_time'].split(':'))
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                # 在目标时间前后30秒内触发
+                if 0 <= (now - target).total_seconds() < 30:
+                    print(f'[关机] 到达定时关机时间 {cfg["shutdown_time"]}，开始级联关机')
+                    _do_cascade_shutdown(gui_ref)
+                    break  # 关机后退出循环
+            except:
+                pass
+        time.sleep(10)
+    _shutdown_timer_running = False
+
+def _do_cascade_shutdown(gui_ref):
+    """级联关机：先给所有在线设备发关机指令，等全部离线后关掉自己"""
+    import urllib.request
+    # 1. 向所有在线设备发送关机指令
+    local_ip = _get_local_ip()
+    clients_copy = dict(_clients)
+    now = datetime.datetime.now()
+    online_ids = []
+    for cid, info in clients_copy.items():
+        last_seen = info.get('last_seen', now)
+        if isinstance(last_seen, str):
+            try: last_seen = datetime.datetime.strptime(last_seen, '%Y-%m-%d %H:%M:%S')
+            except: last_seen = now - datetime.timedelta(days=1)
+        if (now - last_seen).total_seconds() < 15:
+            online_ids.append(cid)
+    
+    if online_ids:
+        try:
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({'target_ids': online_ids, 'cmd': 'shutdown'}).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print(f'[关机] 已发送关机指令到 {len(online_ids)} 台设备')
+        except Exception as e:
+            print(f'[关机] 发送关机指令失败: {e}')
+        if gui_ref:
+            try:
+                gui_ref.root.after(0, lambda: gui_ref._append_diag(f'已发送关机指令到 {len(online_ids)} 台在线设备，等待全部离线...'))
+            except: pass
+    
+    # 2. 等待所有设备离线（最多等5分钟）
+    wait_start = time.time()
+    while time.time() - wait_start < 300:
+        clients_copy = dict(_clients)
+        now = datetime.datetime.now()
+        still_online = 0
+        for cid, info in clients_copy.items():
+            last_seen = info.get('last_seen', now)
+            if isinstance(last_seen, str):
+                try: last_seen = datetime.datetime.strptime(last_seen, '%Y-%m-%d %H:%M:%S')
+                except: last_seen = now - datetime.timedelta(days=1)
+            if (now - last_seen).total_seconds() < 15:
+                still_online += 1
+        if still_online == 0:
+            break
+        time.sleep(5)
+    
+    # 3. 所有设备已离线（或超时），关掉服务器自己
+    print('[关机] 所有设备已离线，服务器即将关机')
+    if gui_ref:
+        try:
+            gui_ref.root.after(0, lambda: gui_ref._append_diag('所有设备已离线，服务器即将关机...'))
+        except: pass
+    time.sleep(3)  # 留3秒让日志写入
+    # Windows关机
+    if sys.platform == 'win32':
+        try:
+            import subprocess
+            subprocess.run(['shutdown', '/s', '/t', '5', '/c', '坤展成终端管理系统：所有设备已关机，服务器自动关机'],
+                          creationflags=0x08000000, timeout=10)
+        except Exception as e:
+            print(f'[关机] 服务器关机失败: {e}')
+    else:
+        try:
+            import subprocess
+            subprocess.run(['shutdown', '-h', 'now'], timeout=10)
+        except Exception as e:
+            print(f'[关机] 服务器关机失败: {e}')
+
+def start_shutdown_timer(gui_ref):
+    """启动定时关机检查线程"""
+    global _shutdown_timer_thread, _shutdown_timer_running
+    _shutdown_timer_running = False
+    if _shutdown_timer_thread and _shutdown_timer_thread.is_alive():
+        _shutdown_timer_running = False
+        _shutdown_timer_thread.join(timeout=3)
+    _shutdown_timer_thread = threading.Thread(target=_shutdown_timer_loop, args=(gui_ref,), daemon=True)
+    _shutdown_timer_thread.start()
+
+def stop_shutdown_timer():
+    """停止定时关机检查"""
+    global _shutdown_timer_running
+    _shutdown_timer_running = False
 
 # ===== FastAPI =====
 from fastapi import FastAPI, HTTPException, Request
@@ -592,7 +782,7 @@ setInterval(refresh, 10000);
 class ServerGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title('坤展成终端管理系统 v1.3-45 - 服务器端')
+        self.root.title('坤展成终端管理系统 v1.5.0 - 服务器端')
         self.root.geometry('1100x700')
         self.root.minsize(900, 600)
         
@@ -608,7 +798,7 @@ class ServerGUI:
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
-        tk.Label(title_frame, text='坤展成终端管理系统 v1.3-45 - 服务器端',
+        tk.Label(title_frame, text='坤展成终端管理系统 v1.5.0 - 服务器端',
                 font=('Microsoft YaHei', 14, 'bold'), fg='white', bg='#2c3e50').pack(pady=(8, 0))
         tk.Label(title_frame, text='北京万乘兄弟科技有限公司  联系电话：18210234280',
                 font=('Microsoft YaHei', 8), fg='#bdc3c7', bg='#2c3e50').pack()
@@ -713,6 +903,42 @@ class ServerGUI:
             row, col = i // 3, i % 3
             tk.Button(btn_grid, text=text, width=10, bg=color, fg='white', font=('Microsoft YaHei', 9, 'bold'),
                      command=cmd).grid(row=row, column=col, padx=5, pady=5)
+        
+        # 电源管理区域
+        power_frame = tk.LabelFrame(right_frame, text=' 电源管理 ', font=('Microsoft YaHei', 10, 'bold'))
+        power_frame.pack(fill='x', padx=10, pady=5)
+        power_grid = tk.Frame(power_frame)
+        power_grid.pack(padx=10, pady=8)
+        
+        # WOL自动开机
+        self.wol_enabled_var = tk.BooleanVar(value=_power_config.get('wol_enabled', True))
+        tk.Checkbutton(power_grid, text='启动时自动唤醒所有设备', variable=self.wol_enabled_var,
+                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=0, column=0, columnspan=3, sticky='w', pady=2)
+        
+        tk.Label(power_grid, text='唤醒延迟（秒）：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=2)
+        self.wol_delay_var = tk.StringVar(value=str(_power_config.get('wol_delay_sec', 5)))
+        tk.Spinbox(power_grid, from_=1, to=60, textvariable=self.wol_delay_var, width=5,
+                  font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=1, column=1, sticky='w', padx=5, pady=2)
+        tk.Button(power_grid, text='立即唤醒所有', width=12, bg='#27ae60', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._wol_wake_now).grid(row=1, column=2, padx=10, pady=2)
+        
+        # 定时级联关机
+        self.shutdown_enabled_var = tk.BooleanVar(value=_power_config.get('shutdown_enabled', False))
+        tk.Checkbutton(power_grid, text='定时级联关机', variable=self.shutdown_enabled_var,
+                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=2, column=0, columnspan=2, sticky='w', pady=2)
+        
+        tk.Label(power_grid, text='关机时间：', font=('Microsoft YaHei', 9)).grid(row=3, column=0, sticky='w', pady=2)
+        self.shutdown_time_var = tk.StringVar(value=_power_config.get('shutdown_time', '18:00'))
+        tk.Entry(power_grid, textvariable=self.shutdown_time_var, width=8,
+                font=('Microsoft YaHei', 9)).grid(row=3, column=1, sticky='w', padx=5, pady=2)
+        tk.Label(power_grid, text='（HH:MM格式，到时间先关所有设备再关本机）', font=('Microsoft YaHei', 8),
+                fg='#888').grid(row=3, column=2, sticky='w', padx=5, pady=2)
+        
+        # 保存配置按钮
+        tk.Button(power_grid, text='保存设置', width=10, bg='#3498db', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_power_config).grid(row=4, column=0, pady=5)
+        tk.Button(power_grid, text='立即级联关机', width=12, bg='#e74c3c', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._cascade_shutdown_now).grid(row=4, column=1, padx=5, pady=5)
         
         # 文件传输区域
         file_frame = tk.LabelFrame(right_frame, text=' 文件传输 ', font=('Microsoft YaHei', 10, 'bold'))
@@ -1074,6 +1300,46 @@ class ServerGUI:
             self.transfer_status_var.config(text=f'发送失败: {e}', fg='#e74c3c')
             messagebox.showerror('错误', f'发送失败: {e}')
     
+    def _save_power_config(self):
+        """保存电源管理配置"""
+        global _power_config
+        try:
+            _power_config['wol_enabled'] = self.wol_enabled_var.get()
+            _power_config['wol_delay_sec'] = int(self.wol_delay_var.get())
+        except:
+            pass
+        try:
+            _power_config['shutdown_enabled'] = self.shutdown_enabled_var.get()
+            t = self.shutdown_time_var.get().strip()
+            if t:
+                h, m = map(int, t.split(':'))
+                assert 0 <= h <= 23 and 0 <= m <= 59
+                _power_config['shutdown_time'] = t
+        except:
+            pass
+        save_power_config(_power_config)
+        # 启停定时关机线程
+        if _power_config.get('shutdown_enabled'):
+            start_shutdown_timer(self)
+        else:
+            stop_shutdown_timer()
+        self._append_diag(f'电源配置已保存: WOL={_power_config["wol_enabled"]}, 关机时间={_power_config.get("shutdown_time","未设置")}')
+    
+    def _wol_wake_now(self):
+        """立即唤醒所有设备"""
+        results = wol_wake_all()
+        msg = '\n'.join(results) if results else '没有已知设备（需设备先注册过才有MAC）'
+        self._append_diag(f'WOL唤醒结果:\n{msg}')
+        messagebox.showinfo('WOL唤醒', f'已发送唤醒包到 {len(results)} 台设备')
+    
+    def _cascade_shutdown_now(self):
+        """立即级联关机"""
+        if not messagebox.askyesno('确认级联关机', 
+            '将向所有在线设备发送关机指令，\n等待全部离线后关闭本机。\n\n确定继续？'):
+            return
+        # 在后台线程执行级联关机
+        threading.Thread(target=_do_cascade_shutdown, args=(self,), daemon=True).start()
+    
     def run(self):
         self.root.mainloop()
 
@@ -1119,14 +1385,27 @@ def main():
     
     local_ip = _get_local_ip()
     print('=' * 50)
-    print('  坤展成终端管理系统 — 服务器端 v1.3-45')
+    print('  坤展成终端管理系统 — 服务器端 v1.5.0')
     print(f'  管理界面: http://{local_ip}:8080')
     print(f'  UDP广播端口: {BROADCAST_PORT}')
     print('  通信协议: HTTP轮询（稳定可靠）')
+    print(f'  WOL自动开机: {"启用" if _power_config.get("wol_enabled") else "禁用"}（延迟{_power_config.get("wol_delay_sec",5)}秒）')
+    if _power_config.get('shutdown_enabled'):
+        print(f'  定时级联关机: {_power_config.get("shutdown_time","未设置")}')
     print('=' * 50)
     
     # 启动tkinter GUI
     gui = ServerGUI()
+    
+    # 启动后自动WOL开机
+    if _power_config.get('wol_enabled', False) and len(_clients) > 0:
+        t_wol = threading.Thread(target=_auto_wol_thread, args=(gui,), daemon=True)
+        t_wol.start()
+    
+    # 启动定时关机检查线程
+    if _power_config.get('shutdown_enabled', False):
+        start_shutdown_timer(gui)
+    
     gui.run()
 
 if __name__ == '__main__':

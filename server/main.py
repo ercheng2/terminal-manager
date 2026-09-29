@@ -3595,32 +3595,9 @@ class RemoteDesktopViewer:
 
 
 
-        # 电源管理区域
-        power_frame = tk.LabelFrame(right_frame, text=' 电源管理 ', font=('Microsoft YaHei', 10, 'bold'))
-        power_frame.pack(fill='x', padx=10, pady=5)
-        power_grid = tk.Frame(power_frame)
-        power_grid.pack(padx=8, pady=6)
 
-        self.wol_enabled_var = tk.BooleanVar(value=_power_config.get('wol_enabled', True))
-        tk.Checkbutton(power_grid, text='启动时自动唤醒所有设备', variable=self.wol_enabled_var,
-                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=0, column=0, columnspan=4, sticky='w', pady=1)
-        tk.Label(power_grid, text='延迟(秒)：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=1)
-        self.wol_delay_var = tk.StringVar(value=str(_power_config.get('wol_delay_sec', 5)))
-        tk.Spinbox(power_grid, from_=1, to=60, textvariable=self.wol_delay_var, width=4,
-                  font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=1, column=1, sticky='w', padx=3, pady=1)
-        tk.Button(power_grid, text='立即唤醒所有', width=11, bg='#27ae60', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._wol_wake_now).grid(row=1, column=2, padx=8, pady=1)
-        self.shutdown_enabled_var = tk.BooleanVar(value=_power_config.get('shutdown_enabled', False))
-        tk.Checkbutton(power_grid, text='定时级联关机', variable=self.shutdown_enabled_var,
-                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=2, column=0, columnspan=2, sticky='w', pady=1)
-        tk.Label(power_grid, text='时间：', font=('Microsoft YaHei', 9)).grid(row=2, column=2, sticky='w', pady=1)
-        self.shutdown_time_var = tk.StringVar(value=_power_config.get('shutdown_time', '18:00'))
-        tk.Entry(power_grid, textvariable=self.shutdown_time_var, width=6,
-                font=('Microsoft YaHei', 9)).grid(row=2, column=3, sticky='w', padx=2, pady=1)
-        tk.Button(power_grid, text='保存', width=5, bg='#3498db', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_power_config).grid(row=3, column=0, pady=3)
-        tk.Button(power_grid, text='立即级联关机', width=11, bg='#e74c3c', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._cascade_shutdown_now).grid(row=3, column=1, columnspan=2, padx=3, pady=3, sticky='w')
+
+
 
         # 状态提示
 
@@ -6422,6 +6399,33 @@ class ServerGUI:
         
 
 
+
+        # 电源管理区域
+        power_frame = tk.LabelFrame(right_frame, text=' 电源管理 ', font=('Microsoft YaHei', 10, 'bold'))
+        power_frame.pack(fill='x', padx=10, pady=5)
+        power_grid = tk.Frame(power_frame)
+        power_grid.pack(padx=8, pady=6)
+
+        self.wol_enabled_var = tk.BooleanVar(value=_power_config.get('wol_enabled', True))
+        tk.Checkbutton(power_grid, text='启动时自动唤醒所有设备', variable=self.wol_enabled_var,
+                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=0, column=0, columnspan=4, sticky='w', pady=1)
+        tk.Label(power_grid, text='延迟(秒)：', font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=1)
+        self.wol_delay_var = tk.StringVar(value=str(_power_config.get('wol_delay_sec', 5)))
+        tk.Spinbox(power_grid, from_=1, to=60, textvariable=self.wol_delay_var, width=4,
+                  font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=1, column=1, sticky='w', padx=3, pady=1)
+        tk.Button(power_grid, text='立即唤醒所有', width=11, bg='#27ae60', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._wol_wake_now).grid(row=1, column=2, padx=8, pady=1)
+        self.shutdown_enabled_var = tk.BooleanVar(value=_power_config.get('shutdown_enabled', False))
+        tk.Checkbutton(power_grid, text='定时级联关机', variable=self.shutdown_enabled_var,
+                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=2, column=0, columnspan=2, sticky='w', pady=1)
+        tk.Label(power_grid, text='时间：', font=('Microsoft YaHei', 9)).grid(row=2, column=2, sticky='w', pady=1)
+        self.shutdown_time_var = tk.StringVar(value=_power_config.get('shutdown_time', '18:00'))
+        tk.Entry(power_grid, textvariable=self.shutdown_time_var, width=6,
+                font=('Microsoft YaHei', 9)).grid(row=2, column=3, sticky='w', padx=2, pady=1)
+        tk.Button(power_grid, text='保存', width=5, bg='#3498db', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_power_config).grid(row=3, column=0, pady=3)
+        tk.Button(power_grid, text='立即级联关机', width=11, bg='#e74c3c', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._cascade_shutdown_now).grid(row=3, column=1, columnspan=2, padx=3, pady=3, sticky='w')
 
         # 状态提示
 

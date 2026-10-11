@@ -320,6 +320,26 @@ def save_devices(data):
 
 # ===== 电源管理配置 =====
 POWER_CFG_FILE = os.path.join(BASE_DIR, 'power_config.json')
+DEVICE_SHUTDOWN_FILE = os.path.join(BASE_DIR, 'device_shutdown_time.json')
+_device_shutdown_time = {}  # client_id -> "HH:MM" (空字符串表示禁用)
+
+def load_device_shutdown_time():
+    global _device_shutdown_time
+    try:
+        if os.path.exists(DEVICE_SHUTDOWN_FILE):
+            with open(DEVICE_SHUTDOWN_FILE, 'r', encoding='utf-8') as f:
+                _device_shutdown_time = json.load(f)
+    except:
+        _device_shutdown_time = {}
+
+def save_device_shutdown_time():
+    try:
+        with open(DEVICE_SHUTDOWN_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_device_shutdown_time, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f'[保存设备关机时间失败] {e}')
+
+load_device_shutdown_time()
 
 def load_power_config():
     defaults = {
@@ -381,18 +401,51 @@ def _shutdown_timer_loop(gui_ref):
     global _shutdown_timer_running
     _shutdown_timer_running = True
     while _shutdown_timer_running:
+        now = datetime.datetime.now()
+        # 1. 全局级联关机
         cfg = _power_config
         if cfg.get('shutdown_enabled', False) and cfg.get('shutdown_time', ''):
-            now = datetime.datetime.now()
             try:
                 h, m = map(int, cfg['shutdown_time'].split(':'))
                 target = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 if 0 <= (now - target).total_seconds() < 30:
-                    print(f'[关机] 到达定时关机时间 {cfg["shutdown_time"]}，开始级联关机')
+                    print(f'[关机] 到达全局定时关机时间 {cfg["shutdown_time"]}，开始级联关机')
                     _do_cascade_shutdown(gui_ref)
                     break
             except:
                 pass
+        # 2. 单设备定时关机
+        try:
+            for cid, t in list(_device_shutdown_time.items()):
+                if not t:
+                    continue
+                h, m = map(int, t.split(':'))
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                if 0 <= (now - target).total_seconds() < 30:
+                    info = _clients.get(cid)
+                    if info:
+                        last_seen = info.get('last_seen', now)
+                        if isinstance(last_seen, str):
+                            try: last_seen = datetime.datetime.strptime(last_seen, '%Y-%m-%d %H:%M:%S')
+                            except: last_seen = now - datetime.timedelta(days=1)
+                        if (now - last_seen).total_seconds() < 15:
+                            print(f'[关机] 设备 {cid[:8]} 到达定时关机时间 {t}，发送关机指令')
+                            try:
+                                import urllib.request as _ur
+                                local_ip = _get_local_ip()
+                                url = f'http://{local_ip}:8080/api/command'
+                                data = json.dumps({'target_ids': [cid], 'cmd': 'shutdown'}).encode('utf-8')
+                                req = _ur.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+                                with _ur.urlopen(req, timeout=10) as resp:
+                                    pass
+                                if gui_ref:
+                                    gui_ref.root.after(0, lambda c=cid, tt=t: gui_ref._append_diag(f'已发送定时关机指令到设备 {c[:8]} (时间 {tt})'))
+                            except Exception as e:
+                                print(f'[关机] 单设备关机失败: {e}')
+                            del _device_shutdown_time[cid]
+                            save_device_shutdown_time()
+        except Exception as e:
+            print(f'[单设备关机检查异常] {e}')
         time.sleep(10)
     _shutdown_timer_running = False
 
@@ -6044,6 +6097,19 @@ class ServerGUI:
 
 
 
+        # 设备定时关机模块（每台设备单独设置）
+        shutdown_frame = tk.LabelFrame(right_frame, text=' 设备定时关机 ', font=('Microsoft YaHei', 10, 'bold'))
+        shutdown_frame.pack(fill='x', padx=10, pady=5)
+        shutdown_row = tk.Frame(shutdown_frame)
+        shutdown_row.pack(padx=8, pady=6, fill='x')
+        self.device_shutdown_enable_var = tk.BooleanVar(value=False)
+        tk.Label(shutdown_row, text='定时关机（HH:MM）：', font=('Microsoft YaHei', 9)).pack(side='left', padx=(0, 5))
+        self.device_shutdown_time_var = tk.StringVar(value='')
+        tk.Entry(shutdown_row, textvariable=self.device_shutdown_time_var, width=8, font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
+        tk.Button(shutdown_row, text='保存', width=6, bg='#3498db', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_device_shutdown_time).pack(side='left', padx=5)
+        tk.Label(shutdown_row, text='（留空=禁用，到点自动向该设备发关机指令）', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=5)
+
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 
 
@@ -7675,9 +7741,35 @@ class ServerGUI:
 
 
 
-    
+        # 更新本设备定时关机时间
+        if hasattr(self, 'device_shutdown_time_var'):
+            self.device_shutdown_time_var.set(_device_shutdown_time.get(self.selected_client_id, ''))
 
 
+
+    def _save_device_shutdown_time(self):
+        """保存当前选中设备的定时关机时间"""
+        if not self.selected_client_id:
+            return
+        t = self.device_shutdown_time_var.get().strip() if hasattr(self, 'device_shutdown_time_var') else ''
+        if t:
+            import re as _re
+            if not _re.match(r'^\d{1,2}:\d{2}$', t):
+                try:
+                    if hasattr(self, '_append_diag'):
+                        self.root.after(0, lambda: self._append_diag('时间格式错误，应为 HH:MM'))
+                except: pass
+                return
+            _device_shutdown_time[self.selected_client_id] = t
+        else:
+            if self.selected_client_id in _device_shutdown_time:
+                del _device_shutdown_time[self.selected_client_id]
+        save_device_shutdown_time()
+        try:
+            if hasattr(self, '_append_diag'):
+                msg = f'已保存设备 {self.selected_client_id[:8]} 定时关机: {t if t else "已禁用"}'
+                self.root.after(0, lambda: self._append_diag(msg))
+        except: pass
 
     def _send_command(self, cmd):
 

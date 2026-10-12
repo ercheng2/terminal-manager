@@ -6097,18 +6097,24 @@ class ServerGUI:
 
 
 
-        # 设备定时关机模块（每台设备单独设置）
-        shutdown_frame = tk.LabelFrame(right_frame, text=' 设备定时关机 ', font=('Microsoft YaHei', 10, 'bold'))
-        shutdown_frame.pack(fill='x', padx=10, pady=5)
-        shutdown_row = tk.Frame(shutdown_frame)
-        shutdown_row.pack(padx=8, pady=6, fill='x')
-        self.device_shutdown_enable_var = tk.BooleanVar(value=False)
-        tk.Label(shutdown_row, text='定时关机（HH:MM）：', font=('Microsoft YaHei', 9)).pack(side='left', padx=(0, 5))
+        # 设备电源管理模块（每台设备单独设置）
+        self.device_power_frame = tk.LabelFrame(right_frame, text=' 设备电源管理 ', font=('Microsoft YaHei', 10, 'bold'))
+        self.device_power_frame.pack(fill='x', padx=10, pady=5)
+        # 第一行：当前选中设备信息
+        self.device_power_top_row = tk.Frame(self.device_power_frame)
+        self.device_power_top_row.pack(padx=8, pady=(6, 2), fill='x')
+        tk.Label(self.device_power_top_row, text='当前设备：', font=('Microsoft YaHei', 9)).pack(side='left')
+        self.device_power_name_var = tk.StringVar(value='（请先点选左侧设备）')
+        tk.Label(self.device_power_top_row, textvariable=self.device_power_name_var, font=('Microsoft YaHei', 9, 'bold'), fg='#2980b9').pack(side='left', padx=3)
+        # 第二行：定时关机时间
+        self.device_power_row = tk.Frame(self.device_power_frame)
+        self.device_power_row.pack(padx=8, pady=(2, 6), fill='x')
+        tk.Label(self.device_power_row, text='定时关机（HH:MM）：', font=('Microsoft YaHei', 9)).pack(side='left', padx=(0, 5))
         self.device_shutdown_time_var = tk.StringVar(value='')
-        tk.Entry(shutdown_row, textvariable=self.device_shutdown_time_var, width=8, font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
-        tk.Button(shutdown_row, text='保存', width=6, bg='#3498db', fg='white',
+        tk.Entry(self.device_power_row, textvariable=self.device_shutdown_time_var, width=8, font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
+        tk.Button(self.device_power_row, text='保存', width=6, bg='#3498db', fg='white',
                  font=('Microsoft YaHei', 9, 'bold'), command=self._save_device_shutdown_time).pack(side='left', padx=5)
-        tk.Label(shutdown_row, text='（留空=禁用，到点自动向该设备发关机指令）', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=5)
+        tk.Label(self.device_power_row, text='留空=禁用', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=5)
 
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 
@@ -6481,17 +6487,9 @@ class ServerGUI:
                   font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=1, column=1, sticky='w', padx=3, pady=1)
         tk.Button(power_grid, text='立即唤醒所有', width=11, bg='#27ae60', fg='white',
                  font=('Microsoft YaHei', 9, 'bold'), command=self._wol_wake_now).grid(row=1, column=2, padx=8, pady=1)
-        self.shutdown_enabled_var = tk.BooleanVar(value=_power_config.get('shutdown_enabled', False))
-        tk.Checkbutton(power_grid, text='定时级联关机', variable=self.shutdown_enabled_var,
-                      font=('Microsoft YaHei', 9), command=self._save_power_config).grid(row=2, column=0, columnspan=2, sticky='w', pady=1)
-        tk.Label(power_grid, text='时间：', font=('Microsoft YaHei', 9)).grid(row=2, column=2, sticky='w', pady=1)
-        self.shutdown_time_var = tk.StringVar(value=_power_config.get('shutdown_time', '18:00'))
-        tk.Entry(power_grid, textvariable=self.shutdown_time_var, width=6,
-                font=('Microsoft YaHei', 9)).grid(row=2, column=3, sticky='w', padx=2, pady=1)
-        tk.Button(power_grid, text='保存', width=5, bg='#3498db', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_power_config).grid(row=3, column=0, pady=3)
         tk.Button(power_grid, text='立即级联关机', width=11, bg='#e74c3c', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._cascade_shutdown_now).grid(row=3, column=1, columnspan=2, padx=3, pady=3, sticky='w')
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._cascade_shutdown_now).grid(row=2, column=0, columnspan=2, padx=3, pady=3, sticky='w')
+        tk.Label(power_grid, text='（单设备定时关机：请点选左侧设备→下方"设备电源管理"）', font=('Microsoft YaHei', 8), fg='#7f8c8d').grid(row=3, column=0, columnspan=4, sticky='w', pady=1)
 
         # 状态提示
 
@@ -7741,9 +7739,13 @@ class ServerGUI:
 
 
 
-        # 更新本设备定时关机时间
+        # 更新本设备定时关机时间 + 设备电源管理区域显示
         if hasattr(self, 'device_shutdown_time_var'):
             self.device_shutdown_time_var.set(_device_shutdown_time.get(self.selected_client_id, ''))
+        if hasattr(self, 'device_power_name_var'):
+            alias_name = _device_alias.get(self.selected_client_id, '')
+            display = f'{alias_name}（{hostname}） - {self.selected_client_id[:8]}' if alias_name else f'{hostname} - {self.selected_client_id[:8]}'
+            self.device_power_name_var.set(display)
 
 
 

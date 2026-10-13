@@ -993,6 +993,8 @@ class HTTPClient:
         
         # 第一步：注册
         info = SystemInfo.get_info()
+        cfg = load_config()
+        serial = _get_serial_number()
         reg_data = json.dumps({
             'hostname': info['hostname'],
             'os': info['os'],
@@ -1004,6 +1006,8 @@ class HTTPClient:
             'cpu_percent': info.get('cpu_percent', 0),
             'memory_percent': info.get('memory_percent', 0),
             'disk_percent': info.get('disk_percent', 0),
+            'activated': bool(cfg.get('activated', False)),
+            'serial': serial,
         }).encode('utf-8')
 
         req = urllib.request.Request(
@@ -1673,6 +1677,20 @@ class CommandHandler:
         elif cmd == 'unmute':
             ok = VolumeControl.unmute()
             result = {'status': 'success' if ok else 'failed', 'msg': '已取消静音' if ok else '取消静音失败'}
+        elif cmd == 'activate_remote':
+            # 服务器远程推送激活码
+            key = data.get('activation_key', '').strip()
+            serial = _get_serial_number()
+            if _verify_activation(serial, key):
+                self.app.config['activation_key'] = key
+                self.app.config['activated'] = True
+                save_config(self.app.config)
+                try:
+                    self.app._update_activation_ui()
+                except: pass
+                result = {'status': 'success', 'msg': f'远程激活成功（序列号 {serial}）'}
+            else:
+                result = {'status': 'failed', 'msg': '远程激活失败：注册码不正确'}
         elif cmd == 'status':
             vol = VolumeControl.get_volume()
             muted = VolumeControl.is_muted()

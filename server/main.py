@@ -1487,6 +1487,11 @@ async def client_register(request: Request):
 
 
 
+                'activated': bool(data.get('activated', False)),
+                'serial': data.get('serial', ''),
+
+
+
             }
 
 
@@ -1929,7 +1934,10 @@ async def client_status(request: Request):
 
             _clients[client_id]['ip'] = data['ip']
 
-
+        if 'activated' in data:
+            _clients[client_id]['activated'] = bool(data['activated'])
+        if data.get('serial'):
+            _clients[client_id]['serial'] = data['serial']
 
         return {'success': True}
 
@@ -6116,6 +6124,35 @@ class ServerGUI:
                  font=('Microsoft YaHei', 9, 'bold'), command=self._save_device_shutdown_time).pack(side='left', padx=5)
         tk.Label(self.device_power_row, text='留空=禁用', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=5)
 
+        # 软件激活模块（按设备显示/操作）
+        self.activation_frame = tk.LabelFrame(right_frame, text=' 💳 软件激活 ', font=('Microsoft YaHei', 10, 'bold'))
+        self.activation_frame.pack(fill='x', padx=10, pady=5)
+        # 第一行：当前设备 + 激活状态
+        act_row1 = tk.Frame(self.activation_frame)
+        act_row1.pack(padx=8, pady=(6, 2), fill='x')
+        tk.Label(act_row1, text='当前设备：', font=('Microsoft YaHei', 9)).pack(side='left')
+        self.act_device_name_var = tk.StringVar(value='（请先点选左侧设备）')
+        tk.Label(act_row1, textvariable=self.act_device_name_var, font=('Microsoft YaHei', 9, 'bold'), fg='#2980b9').pack(side='left', padx=3)
+        self.act_status_var = tk.StringVar(value='')
+        self.act_status_label = tk.Label(act_row1, textvariable=self.act_status_var, font=('Microsoft YaHei', 9, 'bold'), fg='#27ae60')
+        self.act_status_label.pack(side='right', padx=5)
+        # 第二行：序列号
+        act_row2 = tk.Frame(self.activation_frame)
+        act_row2.pack(padx=8, pady=2, fill='x')
+        tk.Label(act_row2, text='机器序列号：', font=('Microsoft YaHei', 9)).pack(side='left')
+        self.act_serial_var = tk.StringVar(value='-')
+        tk.Entry(act_row2, textvariable=self.act_serial_var, font=('Consolas', 9), state='readonly', readonlybackground='#f5f5f5', fg='#2c3e50').pack(side='left', fill='x', expand=True, padx=2)
+        tk.Button(act_row2, text='📋 复制', width=6, bg='#95a5a6', fg='white',
+                 font=('Microsoft YaHei', 9), command=self._copy_serial).pack(side='left', padx=2)
+        # 第三行：远程激活
+        act_row3 = tk.Frame(self.activation_frame)
+        act_row3.pack(padx=8, pady=(2, 6), fill='x')
+        tk.Label(act_row3, text='生成注册码：', font=('Microsoft YaHei', 9)).pack(side='left')
+        self.act_key_var = tk.StringVar(value='点下方"生成并推送"自动产生')
+        tk.Entry(act_row3, textvariable=self.act_key_var, font=('Consolas', 10), state='readonly', readonlybackground='#f5f5f5', fg='#c0392b').pack(side='left', fill='x', expand=True, padx=2)
+        tk.Button(act_row3, text='✨ 生成并推送', width=12, bg='#e67e22', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._generate_and_push_activation).pack(side='left', padx=2)
+
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 
 
@@ -6941,13 +6978,15 @@ class ServerGUI:
 
                 content = f'{hostname}\nIP: {ip}\n[{alias}]'
 
-
-
             else:
 
-
-
                 content = f'{hostname}\nIP: {ip}'
+
+            # 追加激活状态徽章
+            if info.get('activated', False):
+                content += '\n✅ 已激活'
+            else:
+                content += '\n⚠️ 未激活'
 
 
 
@@ -7747,6 +7786,25 @@ class ServerGUI:
             display = f'{alias_name}（{hostname}） - {self.selected_client_id[:8]}' if alias_name else f'{hostname} - {self.selected_client_id[:8]}'
             self.device_power_name_var.set(display)
 
+        # 更新软件激活模块显示
+        if hasattr(self, 'act_device_name_var'):
+            alias_name2 = _device_alias.get(self.selected_client_id, '')
+            display2 = f'{alias_name2}（{hostname}）' if alias_name2 else f'{hostname}'
+            self.act_device_name_var.set(display2)
+        if hasattr(self, 'act_serial_var'):
+            serial = self._clients.get(self.selected_client_id, {}).get('serial', '')
+            self.act_serial_var.set(serial if serial else '（客户端尚未上报序列号）')
+        if hasattr(self, 'act_key_var'):
+            self.act_key_var.set('点下方"生成并推送"自动产生')
+        if hasattr(self, 'act_status_var'):
+            activated = self._clients.get(self.selected_client_id, {}).get('activated', False)
+            if activated:
+                self.act_status_var.set('✅ 已激活')
+                self.act_status_label.configure(fg='#27ae60')
+            else:
+                self.act_status_var.set('⚠️ 未激活')
+                self.act_status_label.configure(fg='#e67e22')
+
 
 
     def _save_device_shutdown_time(self):
@@ -7772,6 +7830,46 @@ class ServerGUI:
                 msg = f'已保存设备 {self.selected_client_id[:8]} 定时关机: {t if t else "已禁用"}'
                 self.root.after(0, lambda: self._append_diag(msg))
         except: pass
+
+    def _copy_serial(self):
+        """复制序列号到剪贴板"""
+        s = self.act_serial_var.get().strip() if hasattr(self, 'act_serial_var') else ''
+        if not s or s == '-':
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(s)
+            if hasattr(self, '_append_diag'):
+                self.root.after(0, lambda: self._append_diag(f'已复制序列号: {s}'))
+        except Exception as e:
+            if hasattr(self, '_append_diag'):
+                self.root.after(0, lambda: self._append_diag(f'复制失败: {e}'))
+
+    def _generate_and_push_activation(self):
+        """为当前选中设备生成注册码并推送到客户端激活"""
+        if not self.selected_client_id:
+            return
+        info = self._clients.get(self.selected_client_id, {})
+        serial = info.get('serial', '')
+        if not serial:
+            self.act_status_var.set('⚠️ 客户端未上报序列号')
+            self.act_status_label.configure(fg='#e74c3c')
+            return
+        key = _generate_activation_key(serial)
+        self.act_key_var.set(key)
+        try:
+            cmd_payload = {
+                'cmd': 'activate_remote',
+                'data': {'activation_key': key, 'serial': serial}
+            }
+            self._client_commands.setdefault(self.selected_client_id, []).append(cmd_payload)
+            self.act_status_var.set('✅ 已推送，客户端下次心跳时激活')
+            self.act_status_label.configure(fg='#27ae60')
+            if hasattr(self, '_append_diag'):
+                self.root.after(0, lambda: self._append_diag(f'已为设备 {self.selected_client_id[:8]} 推送激活码: {key}'))
+        except Exception as e:
+            self.act_status_var.set(f'❌ 推送失败: {e}')
+            self.act_status_label.configure(fg='#e74c3c')
 
     def _send_command(self, cmd):
 

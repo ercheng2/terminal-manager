@@ -6140,18 +6140,31 @@ class ServerGUI:
         act_row2 = tk.Frame(self.activation_frame)
         act_row2.pack(padx=8, pady=2, fill='x')
         tk.Label(act_row2, text='机器序列号：', font=('Microsoft YaHei', 9)).pack(side='left')
-        self.act_serial_var = tk.StringVar(value='-')
-        tk.Entry(act_row2, textvariable=self.act_serial_var, font=('Consolas', 9), state='readonly', readonlybackground='#f5f5f5', fg='#2c3e50').pack(side='left', fill='x', expand=True, padx=2)
+        self.act_serial_var = tk.StringVar(value='（请先点选左侧设备）')
+        self.act_serial_entry = tk.Entry(act_row2, textvariable=self.act_serial_var, font=('Consolas', 9), state='readonly', readonlybackground='#f5f5f5', fg='#2c3e50')
+        self.act_serial_entry.pack(side='left', fill='x', expand=True, padx=2)
         tk.Button(act_row2, text='📋 复制', width=6, bg='#95a5a6', fg='white',
                  font=('Microsoft YaHei', 9), command=self._copy_serial).pack(side='left', padx=2)
+        # 第二行半：手动输入序列号（兜底老客户端未自动上报）
+        act_row2b = tk.Frame(self.activation_frame)
+        act_row2b.pack(padx=8, pady=(0, 2), fill='x')
+        tk.Label(act_row2b, text='手动序列号：', font=('Microsoft YaHei', 9), fg='#7f8c8d').pack(side='left')
+        self.act_manual_var = tk.StringVar(value='')
+        self.act_manual_entry = tk.Entry(act_row2b, textvariable=self.act_manual_var, font=('Consolas', 9), fg='#7f8c8d', state='disabled', disabledforeground='#bdc3c7')
+        self.act_manual_entry.pack(side='left', fill='x', expand=True, padx=2)
+        self.act_apply_btn = tk.Button(act_row2b, text='⬇️ 采用', width=6, bg='#bdc3c7', fg='white',
+                 font=('Microsoft YaHei', 9), state='disabled', command=self._apply_manual_serial)
+        self.act_apply_btn.pack(side='left', padx=2)
+        tk.Label(act_row2b, text='客户端没自动上报时可手填', font=('Microsoft YaHei', 8), fg='#95a5a6').pack(side='left', padx=4)
         # 第三行：远程激活
         act_row3 = tk.Frame(self.activation_frame)
         act_row3.pack(padx=8, pady=(2, 6), fill='x')
         tk.Label(act_row3, text='生成注册码：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.act_key_var = tk.StringVar(value='点下方"生成并推送"自动产生')
         tk.Entry(act_row3, textvariable=self.act_key_var, font=('Consolas', 10), state='readonly', readonlybackground='#f5f5f5', fg='#c0392b').pack(side='left', fill='x', expand=True, padx=2)
-        tk.Button(act_row3, text='✨ 生成并推送', width=12, bg='#e67e22', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._generate_and_push_activation).pack(side='left', padx=2)
+        self.act_gen_btn = tk.Button(act_row3, text='✨ 生成并推送', width=12, bg='#bdc3c7', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), state='disabled', command=self._generate_and_push_activation)
+        self.act_gen_btn.pack(side='left', padx=2)
 
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 
@@ -7210,7 +7223,7 @@ class ServerGUI:
 
 
 
-        if self.selected_client_id and self.selected_client_id in _clients:
+        if self.selected_client_id:
 
 
 
@@ -7601,7 +7614,7 @@ class ServerGUI:
         if not self.selected_client_id or self.selected_client_id not in _clients:
 
 
-
+            self._reset_activation_panel()
             return
 
 
@@ -7793,7 +7806,25 @@ class ServerGUI:
             self.act_device_name_var.set(display2)
         if hasattr(self, 'act_serial_var'):
             serial = self._clients.get(self.selected_client_id, {}).get('serial', '')
-            self.act_serial_var.set(serial if serial else '（客户端尚未上报序列号）')
+            if serial:
+                # 设备已上报序列号：手动输入置灰、采用置灰、生成按钮高亮
+                self.act_serial_var.set(serial)
+                if hasattr(self, 'act_manual_entry'):
+                    self.act_manual_entry.config(state='disabled')
+                if hasattr(self, 'act_apply_btn'):
+                    self.act_apply_btn.config(state='disabled', bg='#bdc3c7')
+                if hasattr(self, 'act_gen_btn'):
+                    self.act_gen_btn.config(state='normal', bg='#e67e22')
+            else:
+                # 设备未上报序列号：明确提示，开放手动输入兜底
+                self.act_serial_var.set('（客户端未自动上报，请下方手动输入）')
+                if hasattr(self, 'act_manual_entry'):
+                    self.act_manual_entry.config(state='normal')
+                if hasattr(self, 'act_apply_btn'):
+                    self.act_apply_btn.config(state='normal', bg='#3498db')
+                if hasattr(self, 'act_gen_btn'):
+                    # 生成按钮也可以用（会读手动输入的值）
+                    self.act_gen_btn.config(state='normal', bg='#e67e22')
         if hasattr(self, 'act_key_var'):
             self.act_key_var.set('点下方"生成并推送"自动产生')
         if hasattr(self, 'act_status_var'):
@@ -7848,12 +7879,30 @@ class ServerGUI:
     def _generate_and_push_activation(self):
         """为当前选中设备生成注册码并推送到客户端激活"""
         if not self.selected_client_id:
+            self.act_status_var.set('⚠️ 请先点选左侧设备')
+            self.act_status_label.configure(fg='#e74c3c')
             return
         info = self._clients.get(self.selected_client_id, {})
-        serial = info.get('serial', '')
+        serial = (info.get('serial') or '').strip()
+        # 客户端没自动上报 → 兜底用手动输入
         if not serial:
-            self.act_status_var.set('⚠️ 客户端未上报序列号')
+            manual = (self.act_manual_var.get() if hasattr(self, 'act_manual_var') else '').strip()
+            if manual:
+                info['serial'] = manual
+                self._clients[self.selected_client_id] = info
+                serial = manual
+                # 同步刷新机器序列号显示
+                if hasattr(self, 'act_serial_var'):
+                    self.act_serial_var.set(serial)
+                self.act_status_var.set('ℹ️ 已采用手动输入的序列号')
+                self.act_status_label.configure(fg='#3498db')
+        if not serial:
+            self.act_status_var.set('⚠️ 缺少序列号：请在下方"手动序列号"输入')
             self.act_status_label.configure(fg='#e74c3c')
+            try:
+                if hasattr(self, '_append_diag'):
+                    self.root.after(0, lambda: self._append_diag('生成注册码失败：客户端未上报序列号，且未手动输入'))
+            except: pass
             return
         key = _generate_activation_key(serial)
         self.act_key_var.set(key)
@@ -7870,6 +7919,56 @@ class ServerGUI:
         except Exception as e:
             self.act_status_var.set(f'❌ 推送失败: {e}')
             self.act_status_label.configure(fg='#e74c3c')
+
+    def _apply_manual_serial(self):
+        """采用手动输入的序列号，写入当前选中设备（兜底老客户端未自动上报）"""
+        if not self.selected_client_id:
+            self.act_status_var.set('⚠️ 请先点选左侧设备')
+            self.act_status_label.configure(fg='#e74c3c')
+            return
+        manual = (self.act_manual_var.get() if hasattr(self, 'act_manual_var') else '').strip()
+        if not manual:
+            self.act_status_var.set('⚠️ 手动序列号不能为空')
+            self.act_status_label.configure(fg='#e74c3c')
+            return
+        info = self._clients.get(self.selected_client_id, {})
+        info['serial'] = manual
+        self._clients[self.selected_client_id] = info
+        if hasattr(self, 'act_serial_var'):
+            self.act_serial_var.set(manual)
+        if hasattr(self, 'act_manual_var'):
+            self.act_manual_var.set('')
+        # 采用后置灰手动输入框，避免重复采用
+        if hasattr(self, 'act_manual_entry'):
+            self.act_manual_entry.config(state='disabled')
+        if hasattr(self, 'act_apply_btn'):
+            self.act_apply_btn.config(state='disabled', bg='#bdc3c7')
+        preview = manual if len(manual) <= 24 else manual[:20] + '...'
+        self.act_status_var.set(f'✅ 已采用手动序列号: {preview}')
+        self.act_status_label.configure(fg='#27ae60')
+        try:
+            if hasattr(self, '_append_diag'):
+                self.root.after(0, lambda: self._append_diag(f'已为设备 {self.selected_client_id[:8]} 手动设置序列号: {preview}'))
+        except: pass
+
+    def _reset_activation_panel(self):
+        """重置软件激活面板到初始状态（没选设备或设备已离线时）"""
+        if hasattr(self, 'act_device_name_var'):
+            self.act_device_name_var.set('（请先点选左侧设备）')
+        if hasattr(self, 'act_serial_var'):
+            self.act_serial_var.set('（请先点选左侧设备）')
+        if hasattr(self, 'act_manual_var'):
+            self.act_manual_var.set('')
+        if hasattr(self, 'act_manual_entry'):
+            self.act_manual_entry.config(state='disabled')
+        if hasattr(self, 'act_apply_btn'):
+            self.act_apply_btn.config(state='disabled', bg='#bdc3c7')
+        if hasattr(self, 'act_key_var'):
+            self.act_key_var.set('点下方"生成并推送"自动产生')
+        if hasattr(self, 'act_status_var'):
+            self.act_status_var.set('')
+        if hasattr(self, 'act_gen_btn'):
+            self.act_gen_btn.config(state='disabled', bg='#bdc3c7')
 
     def _send_command(self, cmd):
 

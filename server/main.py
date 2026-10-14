@@ -7907,11 +7907,18 @@ class ServerGUI:
         key = _generate_activation_key(serial)
         self.act_key_var.set(key)
         try:
-            cmd_payload = {
+            import urllib.request
+            import urllib.error
+            local_ip = _get_local_ip()
+            url = f'http://{local_ip}:8080/api/command'
+            data = json.dumps({
+                'target_ids': [self.selected_client_id],
                 'cmd': 'activate_remote',
-                'data': {'activation_key': key, 'serial': serial}
-            }
-            self._client_commands.setdefault(self.selected_client_id, []).append(cmd_payload)
+                'extra': {'activation_key': key, 'serial': serial}
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                json.loads(resp.read().decode('utf-8'))
             self.act_status_var.set('✅ 已推送，客户端下次心跳时激活')
             self.act_status_label.configure(fg='#27ae60')
             if hasattr(self, '_append_diag'):

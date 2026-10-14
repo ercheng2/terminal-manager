@@ -1679,7 +1679,7 @@ class CommandHandler:
             result = {'status': 'success' if ok else 'failed', 'msg': '已取消静音' if ok else '取消静音失败'}
         elif cmd == 'activate_remote':
             # 服务器远程推送激活码
-            key = data.get('activation_key', '').strip()
+            key = (data.get('activation_key') or data.get('extra', {}).get('activation_key') or '').strip()
             serial = _get_serial_number()
             if _verify_activation(serial, key):
                 self.app.config['activation_key'] = key

@@ -6146,19 +6146,19 @@ class ServerGUI:
         tk.Label(act_row2, text='机器序列号：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.act_serial_var = tk.StringVar(value='（请先点选左侧设备）')
         self.act_serial_entry = tk.Entry(act_row2, textvariable=self.act_serial_var, font=('Consolas', 9), state='readonly', readonlybackground='#f5f5f5', fg='#2c3e50')
+        tk.Button(act_row2, text='📋 复制', width=6, bg='#95a5a6', fg='white',
+                 font=('Microsoft YaHei', 9), command=self._copy_serial).pack(side='right', padx=(2, 0))
         self.act_serial_entry.pack(side='left', fill='x', expand=True, padx=2)
-        tk.Button(act_row2, text='📋 复制', width=5, bg='#95a5a6', fg='white',
-                 font=('Microsoft YaHei', 9), command=self._copy_serial).pack(side='left', padx=2)
         # 第二行半：手动输入序列号（兜底老客户端未自动上报）
         act_row2b = tk.Frame(self.activation_frame)
         act_row2b.pack(padx=8, pady=(0, 2), fill='x')
         tk.Label(act_row2b, text='手动序列号：', font=('Microsoft YaHei', 9), fg='#7f8c8d').pack(side='left')
         self.act_manual_var = tk.StringVar(value='')
         self.act_manual_entry = tk.Entry(act_row2b, textvariable=self.act_manual_var, font=('Consolas', 9), fg='#7f8c8d', state='disabled', disabledforeground='#bdc3c7')
-        self.act_manual_entry.pack(side='left', fill='x', expand=True, padx=2)
-        self.act_apply_btn = tk.Button(act_row2b, text='⬇️ 采用', width=5, bg='#bdc3c7', fg='white',
+        self.act_apply_btn = tk.Button(act_row2b, text='⬇️ 采用', width=6, bg='#bdc3c7', fg='white',
                  font=('Microsoft YaHei', 9), state='disabled', command=self._apply_manual_serial)
-        self.act_apply_btn.pack(side='left', padx=2)
+        self.act_apply_btn.pack(side='right', padx=(2, 0))
+        self.act_manual_entry.pack(side='left', fill='x', expand=True, padx=2)
         # 提示放第二行（避免挤掉采用按钮）
         act_row2c = tk.Frame(self.activation_frame)
         act_row2c.pack(padx=8, pady=(0, 2), fill='x')
@@ -6170,9 +6170,9 @@ class ServerGUI:
         self.act_user_key_var = tk.StringVar(value='')
         self.act_user_key_entry = tk.Entry(act_row3, textvariable=self.act_user_key_var, font=('Consolas', 10), fg='#c0392b', state='disabled', disabledforeground='#bdc3c7')
         self.act_user_key_entry.pack(side='left', fill='x', expand=True, padx=2)
-        self.act_push_btn = tk.Button(act_row3, text='🚀 激活客户端', width=11, bg='#bdc3c7', fg='white',
+        self.act_push_btn = tk.Button(act_row3, text='🚀 激活客户端', width=12, bg='#bdc3c7', fg='white',
                  font=('Microsoft YaHei', 9, 'bold'), state='disabled', command=self._push_user_activation)
-        self.act_push_btn.pack(side='left', padx=2)
+        self.act_push_btn.pack(side='right', padx=(2, 0))
 
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 

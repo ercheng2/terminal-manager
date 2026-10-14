@@ -6156,15 +6156,16 @@ class ServerGUI:
                  font=('Microsoft YaHei', 9), state='disabled', command=self._apply_manual_serial)
         self.act_apply_btn.pack(side='left', padx=2)
         tk.Label(act_row2b, text='客户端没自动上报时可手填', font=('Microsoft YaHei', 8), fg='#95a5a6').pack(side='left', padx=4)
-        # 第三行：远程激活
+        # 第三行：远程激活（用户填注册码，服务器推送到客户端）
         act_row3 = tk.Frame(self.activation_frame)
         act_row3.pack(padx=8, pady=(2, 6), fill='x')
-        tk.Label(act_row3, text='生成注册码：', font=('Microsoft YaHei', 9)).pack(side='left')
-        self.act_key_var = tk.StringVar(value='点下方"生成并推送"自动产生')
-        tk.Entry(act_row3, textvariable=self.act_key_var, font=('Consolas', 10), state='readonly', readonlybackground='#f5f5f5', fg='#c0392b').pack(side='left', fill='x', expand=True, padx=2)
-        self.act_gen_btn = tk.Button(act_row3, text='✨ 生成并推送', width=12, bg='#bdc3c7', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), state='disabled', command=self._generate_and_push_activation)
-        self.act_gen_btn.pack(side='left', padx=2)
+        tk.Label(act_row3, text='激活码：', font=('Microsoft YaHei', 9)).pack(side='left')
+        self.act_user_key_var = tk.StringVar(value='')
+        self.act_user_key_entry = tk.Entry(act_row3, textvariable=self.act_user_key_var, font=('Consolas', 10), fg='#c0392b', state='disabled', disabledforeground='#bdc3c7')
+        self.act_user_key_entry.pack(side='left', fill='x', expand=True, padx=2)
+        self.act_push_btn = tk.Button(act_row3, text='🚀 激活客户端', width=12, bg='#bdc3c7', fg='white',
+                 font=('Microsoft YaHei', 9, 'bold'), state='disabled', command=self._push_user_activation)
+        self.act_push_btn.pack(side='left', padx=2)
 
         # 远程桌面大按钮（独立醒目）+ 显示模式选择
 
@@ -7807,26 +7808,29 @@ class ServerGUI:
         if hasattr(self, 'act_serial_var'):
             serial = _clients.get(self.selected_client_id, {}).get('serial', '')
             if serial:
-                # 设备已上报序列号：手动输入置灰、采用置灰、生成按钮高亮
+                # 设备已上报序列号：手动输入置灰、采用置灰、激活码输入开放、激活按钮高亮
                 self.act_serial_var.set(serial)
                 if hasattr(self, 'act_manual_entry'):
                     self.act_manual_entry.config(state='disabled')
                 if hasattr(self, 'act_apply_btn'):
                     self.act_apply_btn.config(state='disabled', bg='#bdc3c7')
-                if hasattr(self, 'act_gen_btn'):
-                    self.act_gen_btn.config(state='normal', bg='#e67e22')
+                if hasattr(self, 'act_user_key_entry'):
+                    self.act_user_key_entry.config(state='normal')
+                if hasattr(self, 'act_push_btn'):
+                    self.act_push_btn.config(state='normal', bg='#e67e22')
             else:
-                # 设备未上报序列号：明确提示，开放手动输入兜底
+                # 设备未上报序列号：明确提示，开放手动输入兜底，激活码输入也可填
                 self.act_serial_var.set('（客户端未自动上报，请下方手动输入）')
                 if hasattr(self, 'act_manual_entry'):
                     self.act_manual_entry.config(state='normal')
                 if hasattr(self, 'act_apply_btn'):
                     self.act_apply_btn.config(state='normal', bg='#3498db')
-                if hasattr(self, 'act_gen_btn'):
-                    # 生成按钮也可以用（会读手动输入的值）
-                    self.act_gen_btn.config(state='normal', bg='#e67e22')
-        if hasattr(self, 'act_key_var'):
-            self.act_key_var.set('点下方"生成并推送"自动产生')
+                if hasattr(self, 'act_user_key_entry'):
+                    self.act_user_key_entry.config(state='normal')
+                if hasattr(self, 'act_push_btn'):
+                    self.act_push_btn.config(state='normal', bg='#e67e22')
+        if hasattr(self, 'act_user_key_var'):
+            self.act_user_key_var.set('')
         if hasattr(self, 'act_status_var'):
             activated = _clients.get(self.selected_client_id, {}).get('activated', False)
             if activated:
@@ -7876,10 +7880,16 @@ class ServerGUI:
             if hasattr(self, '_append_diag'):
                 self.root.after(0, lambda: self._append_diag(f'复制失败: {e}'))
 
-    def _generate_and_push_activation(self):
-        """为当前选中设备生成注册码并推送到客户端激活"""
+    def _push_user_activation(self):
+        """把用户输入的激活码推送给当前选中的客户端激活（服务器不生成注册码）"""
         if not self.selected_client_id:
             self.act_status_var.set('⚠️ 请先点选左侧设备')
+            self.act_status_label.configure(fg='#e74c3c')
+            return
+        # 用户输入的激活码
+        key = (self.act_user_key_var.get() if hasattr(self, 'act_user_key_var') else '').strip()
+        if not key:
+            self.act_status_var.set('⚠️ 请先在上方"激活码"输入框填写注册码')
             self.act_status_label.configure(fg='#e74c3c')
             return
         info = _clients.get(self.selected_client_id, {})
@@ -7897,15 +7907,13 @@ class ServerGUI:
                 self.act_status_var.set('ℹ️ 已采用手动输入的序列号')
                 self.act_status_label.configure(fg='#3498db')
         if not serial:
-            self.act_status_var.set('⚠️ 缺少序列号：请在下方"手动序列号"输入')
+            self.act_status_var.set('⚠️ 缺少序列号：请先在"手动序列号"输入')
             self.act_status_label.configure(fg='#e74c3c')
             try:
                 if hasattr(self, '_append_diag'):
-                    self.root.after(0, lambda: self._append_diag('生成注册码失败：客户端未上报序列号，且未手动输入'))
+                    self.root.after(0, lambda: self._append_diag('推送激活码失败：客户端未上报序列号，且未手动输入'))
             except: pass
             return
-        key = _generate_activation_key(serial)
-        self.act_key_var.set(key)
         try:
             import urllib.request
             import urllib.error
@@ -7919,10 +7927,10 @@ class ServerGUI:
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
             with urllib.request.urlopen(req, timeout=5) as resp:
                 json.loads(resp.read().decode('utf-8'))
-            self.act_status_var.set('✅ 已推送，客户端下次心跳时激活')
+            self.act_status_var.set('✅ 已推送激活码，客户端下次心跳时验证')
             self.act_status_label.configure(fg='#27ae60')
             if hasattr(self, '_append_diag'):
-                self.root.after(0, lambda: self._append_diag(f'已为设备 {self.selected_client_id[:8]} 推送激活码: {key}'))
+                self.root.after(0, lambda: self._append_diag(f'已为设备 {self.selected_client_id[:8]} 推送激活码: {key[:8]}...'))
         except Exception as e:
             self.act_status_var.set(f'❌ 推送失败: {e}')
             self.act_status_label.configure(fg='#e74c3c')
@@ -7970,12 +7978,14 @@ class ServerGUI:
             self.act_manual_entry.config(state='disabled')
         if hasattr(self, 'act_apply_btn'):
             self.act_apply_btn.config(state='disabled', bg='#bdc3c7')
-        if hasattr(self, 'act_key_var'):
-            self.act_key_var.set('点下方"生成并推送"自动产生')
+        if hasattr(self, 'act_user_key_var'):
+            self.act_user_key_var.set('')
+        if hasattr(self, 'act_user_key_entry'):
+            self.act_user_key_entry.config(state='disabled')
         if hasattr(self, 'act_status_var'):
             self.act_status_var.set('')
-        if hasattr(self, 'act_gen_btn'):
-            self.act_gen_btn.config(state='disabled', bg='#bdc3c7')
+        if hasattr(self, 'act_push_btn'):
+            self.act_push_btn.config(state='disabled', bg='#bdc3c7')
 
     def _send_command(self, cmd):
 

@@ -7805,7 +7805,7 @@ class ServerGUI:
             display2 = f'{alias_name2}（{hostname}）' if alias_name2 else f'{hostname}'
             self.act_device_name_var.set(display2)
         if hasattr(self, 'act_serial_var'):
-            serial = self._clients.get(self.selected_client_id, {}).get('serial', '')
+            serial = _clients.get(self.selected_client_id, {}).get('serial', '')
             if serial:
                 # 设备已上报序列号：手动输入置灰、采用置灰、生成按钮高亮
                 self.act_serial_var.set(serial)
@@ -7828,7 +7828,7 @@ class ServerGUI:
         if hasattr(self, 'act_key_var'):
             self.act_key_var.set('点下方"生成并推送"自动产生')
         if hasattr(self, 'act_status_var'):
-            activated = self._clients.get(self.selected_client_id, {}).get('activated', False)
+            activated = _clients.get(self.selected_client_id, {}).get('activated', False)
             if activated:
                 self.act_status_var.set('✅ 已激活')
                 self.act_status_label.configure(fg='#27ae60')
@@ -7882,14 +7882,14 @@ class ServerGUI:
             self.act_status_var.set('⚠️ 请先点选左侧设备')
             self.act_status_label.configure(fg='#e74c3c')
             return
-        info = self._clients.get(self.selected_client_id, {})
+        info = _clients.get(self.selected_client_id, {})
         serial = (info.get('serial') or '').strip()
         # 客户端没自动上报 → 兜底用手动输入
         if not serial:
             manual = (self.act_manual_var.get() if hasattr(self, 'act_manual_var') else '').strip()
             if manual:
                 info['serial'] = manual
-                self._clients[self.selected_client_id] = info
+                _clients[self.selected_client_id] = info
                 serial = manual
                 # 同步刷新机器序列号显示
                 if hasattr(self, 'act_serial_var'):
@@ -7931,9 +7931,9 @@ class ServerGUI:
             self.act_status_var.set('⚠️ 手动序列号不能为空')
             self.act_status_label.configure(fg='#e74c3c')
             return
-        info = self._clients.get(self.selected_client_id, {})
+        info = _clients.get(self.selected_client_id, {})
         info['serial'] = manual
-        self._clients[self.selected_client_id] = info
+        _clients[self.selected_client_id] = info
         if hasattr(self, 'act_serial_var'):
             self.act_serial_var.set(manual)
         if hasattr(self, 'act_manual_var'):

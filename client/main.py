@@ -1921,15 +1921,23 @@ class TerminalApp:
         _kzc_log(f'启动完成: start_minimal={self.config.get("start_minimal", True)}')
 
     def _toggle_main(self, event=None):
-        """按 H 键：logo 态 ↔ 主窗口态 切换（root 自身窗口）"""
-        _kzc_log(f'H 键: main_visible={self._main_visible}')
+        """按 H 键：logo 态 → 主窗口态（root deiconify）"""
+        _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
             # 当前主窗口 → 切回 logo 模式
             self._enter_logo_mode()
         else:
-            # 当前 logo → 显示主窗口
+            # 当前 logo 模式 → 显示主窗口
+            # 1) 关闭 logo 窗
+            if self._logo_window is not None:
+                try:
+                    self._logo_window.destroy()
+                except Exception:
+                    pass
+                self._logo_window = None
+            # 2) root deiconify + 800x680
             try:
-                self._logo_overlay.place_forget()
+                self.root.deiconify()
             except Exception:
                 pass
             self.root.overrideredirect(False)
@@ -1946,47 +1954,106 @@ class TerminalApp:
         """托盘点击：切换 logo 模式（防偷窥第一步）"""
         _kzc_log(f'托盘点击: main_visible={self._main_visible}')
         if getattr(self, '_main_visible', False):
-            # 当前主窗口可见 → 切回 logo 模式
             self._enter_logo_mode()
         else:
-            # 当前是 logo 模式 → 完全隐藏（仅托盘图标）
-            try:
-                self._logo_overlay.place_forget()
-            except Exception:
-                pass
-            self.root.geometry('1x1+20000+20000')
+            # 当前是 logo 模式 → 完全隐藏（销毁 logo 窗，仅留托盘）
+            if self._logo_window is not None:
+                try:
+                    self._logo_window.destroy()
+                except Exception:
+                    pass
+                self._logo_window = None
             _kzc_log('  完全隐藏到托盘')
 
+    def _hide_to_tray(self):
+        """点 X：完全隐藏到托盘（销毁 logo 窗）"""
+        if self._logo_window is not None:
+            try:
+                self._logo_window.destroy()
+            except Exception:
+                pass
+            self._logo_window = None
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        self._main_visible = False
+
     def _enter_logo_mode(self):
-        """进入 logo 模式：root 自身变成 200x80 屏幕右上角小窗"""
+        """进入 logo 模式：root 完全隐藏 + 独立 Toplevel 显示 64x64 KZC logo 图标在屏幕右上角"""
         _kzc_log('========== _enter_logo_mode 开始 ==========')
         try:
-            self.root.update_idletasks()
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            _kzc_log(f'  screen={sw}x{sh}, root_geometry_before={self.root.geometry()}, state={self.root.state()}')
-            self.root.overrideredirect(True)
-            self.root.attributes('-topmost', True)
-            target_x = sw - 220
-            target_y = 20
-            self.root.geometry(f'200x80+{target_x}+{target_y}')
-            self.root.update()
-            _kzc_log(f'  step1 geometry=200x80+{target_x}+{target_y}, 实际={self.root.geometry()}, state={self.root.state()}, viewable={self.root.winfo_viewable()}')
-            if not hasattr(self, '_logo_overlay') or self._logo_overlay is None:
-                self._logo_overlay = tk.Frame(self.root, bg='#2c3e50', width=200, height=80)
-                self._logo_overlay.pack_propagate(False)
-                tk.Label(self._logo_overlay, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
-                         fg='white', bg='#2c3e50').pack(pady=(8, 0))
-                tk.Label(self._logo_overlay, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
-                         fg='#bdc3c7', bg='#2c3e50').pack()
-                tk.Label(self._logo_overlay, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
-                         fg='#f39c12', bg='#2c3e50').pack()
-                _kzc_log('  step2 logo_overlay widget 创建完毕')
-            self._logo_overlay.place(x=0, y=0, width=200, height=80)
-            self._logo_overlay.lift()
-            self.root.focus_force()
+            # 1) 彻底隐藏主窗口
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+            _kzc_log('  step1 root.withdraw 完成')
+            # 2) 已有 logo 窗则只 ensure 显示
+            if self._logo_window is not None:
+                try:
+                    self._logo_window.deiconify()
+                    self._logo_window.lift()
+                except Exception:
+                    self._logo_window = None
+            if self._logo_window is None:
+                lw = tk.Toplevel(self.root)
+                lw.overrideredirect(True)
+                lw.attributes('-topmost', True)
+                lw.configure(bg='#1a1a2e')
+                # 加载 icon.ico 显示为 PhotoImage
+                try:
+                    from PIL import Image, ImageTk
+                    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.ico')
+                    if not os.path.exists(icon_path):
+                        # PyInstaller 解包后路径
+                        import sys as _sys
+                        if hasattr(_sys, '_MEIPASS'):
+                            icon_path = os.path.join(_sys._MEIPASS, 'icon.ico')
+                    _kzc_log(f'  step2 icon_path={icon_path}, exists={os.path.exists(icon_path)}')
+                    img = Image.open(icon_path)
+                    img = img.resize((64, 64), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    label = tk.Label(lw, image=photo, bg='#1a1a2e', bd=0)
+                    label.image = photo
+                    label.pack()
+                except Exception as e:
+                    _kzc_log(f'  PIL 加载失败: {e}, 用 emoji 兜底')
+                    tk.Label(lw, text='🖥️', font=('Segoe UI Emoji', 28),
+                             bg='#1a1a2e', fg='white').pack(expand=True, fill='both')
+                lw.update_idletasks()
+                # 屏幕右上角
+                sw = lw.winfo_screenwidth()
+                lw.geometry(f'64x64+{sw-84}+20')
+                lw.update()
+                # 3) ctypes 解除 Toplevel 对 root 的父依赖，让它成为真正顶级窗（root withdraw 也能显示）
+                try:
+                    import ctypes
+                    hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
+                    ctypes.windll.user32.SetParent(hwnd, 0)
+                    _kzc_log(f'  step3 SetParent 独立顶级 hwnd={hwnd}')
+                except Exception as e:
+                    _kzc_log(f'  step3 SetParent 失败: {e}')
+                # 4) 让 Toplevel 也不进任务栏
+                try:
+                    import ctypes
+                    GWL_EXSTYLE = -20
+                    WS_EX_TOOLWINDOW = 0x00000080
+                    WS_EX_APPWINDOW = 0x00040000
+                    hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
+                    ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                    ex_style |= WS_EX_TOOLWINDOW
+                    ex_style &= ~WS_EX_APPWINDOW
+                    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+                    _kzc_log(f'  step4 WS_EX_TOOLWINDOW hwnd={hwnd} ok')
+                except Exception as e:
+                    _kzc_log(f'  step4 WS_EX_TOOLWINDOW 失败: {e}')
+                lw.bind('<Key-h>', self._toggle_main)
+                lw.bind('<Key-H>', self._toggle_main)
+                self._logo_window = lw
+                _kzc_log(f'  step5 logo 窗创建: geometry={lw.geometry()}, state={lw.state()}, viewable={lw.winfo_viewable()}')
             self._main_visible = False
-            _kzc_log(f'========== _enter_logo_mode 完成: geometry={self.root.geometry()}, state={self.root.state()} ==========')
+            _kzc_log(f'========== _enter_logo_mode 完成 ==========')
         except Exception as e:
             _kzc_log(f'  logo 启动失败: {e}')
             import traceback
@@ -2591,17 +2658,6 @@ class TerminalApp:
         self.lbl_network.config(text='通讯：' + ' | '.join(status_parts),
                                fg='#27ae60' if self.http_client.connected else '#f39c12')
         self.root.after(3000, self._refresh_status)
-
-    def _hide_to_tray(self):
-        """点 X：完全隐藏到托盘（不再回 logo）"""
-        try:
-            self._logo_overlay.place_forget()
-        except Exception:
-            pass
-        self.root.overrideredirect(True)
-        self.root.attributes('-topmost', True)
-        self.root.geometry('1x1+20000+20000')
-        self._main_visible = False
 
     def _quit(self):
         """真正退出程序"""

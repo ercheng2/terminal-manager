@@ -1867,36 +1867,47 @@ class TerminalApp:
 
         # === 启动模式：全隐藏（防偷窥双锁：先点托盘出小图标，再按 H 键才显示主界面）===
         self._logo_window = None
+        self._main_visible = False
         if self.config.get('start_minimal', True):
-            # 启动时主窗口完全隐藏（小图标 = None，等托盘点击才创建）
+            # 启动时主窗口完全透明 + 1x1 + 屏幕外（root 永远激活，Toplevel logo 不受影响）
             self.root.update_idletasks()
-            self.root.withdraw()
+            self.root.attributes('-alpha', 0.0)
+            self.root.geometry(f'1x1+30000+30000')
+            self.root.overrideredirect(True)
         # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
 
     def _toggle_main(self, event=None):
         """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
-        if self.root.state() == 'withdrawn':
-            # 主窗口不可见 → 检查是否在小图标态
+        if self._main_visible:
+            # 当前主窗口可见 → 隐藏（alpha=0 + 1x1 屏幕外）
+            self.root.attributes('-alpha', 0.0)
+            self.root.geometry(f'1x1+30000+30000')
+            self.root.overrideredirect(True)
+            self._main_visible = False
+            # 重新显示小图标
+            if self._logo_window is None:
+                self.root.after(50, self._enter_minimal_mode)
+        else:
+            # 当前主窗口不可见 → 检查是否在小图标态（双锁）
             if self._logo_window is None:
                 # 没有小图标，提示用户先点托盘（双锁机制）
                 print('[防偷窥] 请先点托盘图标显示小图标，再按 H 键解锁')
                 return 'break'
-            # 有小图标 → 关闭小图标 + 显示主窗口
+            # 有小图标 → 关闭小图标 + 显示主窗口（alpha=1 + 800x680 + 有标题栏）
             try:
                 self._logo_window.destroy()
             except Exception:
                 pass
             self._logo_window = None
+            self.root.overrideredirect(False)
             self.root.update_idletasks()
-            self.root.deiconify()
+            self.root.geometry('800x680+200+100')
+            self.root.attributes('-alpha', 1.0)
             self.root.lift()
             self.root.focus_force()
-        else:
-            # 主窗口可见 → 隐藏主窗口 + 重新显示小图标
-            self.root.withdraw()
-            self.root.after(50, self._enter_minimal_mode)
+            self._main_visible = True
         return 'break'
 
     def _toggle_logo(self):
@@ -2546,8 +2557,11 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：withdraw + 重新显示小图标）"""
-        self.root.withdraw()  # 隐藏窗口
+        """隐藏窗口到托盘（点 X 时调用：alpha=0 隐藏 + 重新显示小图标）"""
+        self.root.attributes('-alpha', 0.0)
+        self.root.geometry(f'1x1+30000+30000')
+        self.root.overrideredirect(True)
+        self._main_visible = False
         if self._logo_window is None:
             self.root.after(50, self._enter_minimal_mode)
 

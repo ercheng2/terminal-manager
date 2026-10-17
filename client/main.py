@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     "client_name": "",
     "auto_start": False,
     "minimize_to_tray": False,
-    "start_minimal": True,  # 启动时只显示小 logo，按 H 键显示主界面
+    "start_minimal": True,  # 启动时主窗口完全隐藏（仅系统托盘），按 H 键 / 托盘切换显隐
     "volume_step": 10,
     "delayed_apps": [],
     "startup_items": [],
@@ -293,6 +293,11 @@ def _on_tray_quit(icon, item):
     if _tray_root_ref:
         _tray_root_ref.after(0, _tray_root_ref.quit)
 
+def _on_tray_hide(icon, item):
+    """从托盘隐藏主窗口"""
+    if _tray_root_ref:
+        _tray_root_ref.after(0, _tray_root_ref.withdraw)
+
 def _start_tray(root):
     """启动系统托盘"""
     global _tray_icon, _tray_root_ref
@@ -303,6 +308,7 @@ def _start_tray(root):
         _tray_root_ref = root
         menu = pystray.Menu(
             pystray.MenuItem('显示主窗口', _on_tray_show, default=True),
+            pystray.MenuItem('隐藏主窗口', _on_tray_hide),
             pystray.MenuItem('退出程序', _on_tray_quit),
         )
         _tray_icon = pystray.Icon(
@@ -1859,79 +1865,26 @@ class TerminalApp:
         # 记录是否需要启动时最小化到托盘
         self._start_minimized = self.config.get('minimize_to_tray', False)
 
-        # === 启动模式：默认显示小 logo（按 H 键切换显示主界面）===
-        self._logo_window = None
-        self._minimal_mode = False
+        # === 启动模式：默认只显示托盘（按 H 键 / 托盘切换主窗口显隐，干净模式无 logo 窗）===
         if self.config.get('start_minimal', True):
-            # 先把主窗口 withdraw，再显示 logo 小窗
+            # 启动时主窗口完全隐藏，只剩系统托盘图标
             self.root.update_idletasks()
             self.root.withdraw()
-            self.root.after(100, self._enter_minimal_mode)
+        # 主窗口上绑 H 键：随时切显示/隐藏
+        self.root.bind('<Key-h>', self._toggle_main)
+        self.root.bind('<Key-H>', self._toggle_main)
+
+    def _toggle_main(self, event=None):
+        """按 H 键 / 托盘切换主窗口显隐：干净模式，无 logo 窗"""
+        if self.root.state() == 'withdrawn':
+            # 当前隐藏 → 显示
+            self.root.update_idletasks()
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
         else:
-            # 不启用 logo 模式，但仍绑定 H 键以便在主窗口中随时切换
-            self.root.bind('<Key-h>', self._on_toggle_minimal_key)
-            self.root.bind('<Key-H>', self._on_toggle_minimal_key)
-
-    def _enter_minimal_mode(self):
-        """进入小 logo 模式：只显示一个小窗在屏幕右上角，按 H 切回主窗口"""
-        if self._logo_window is not None:
-            return
-        try:
-            lw = tk.Toplevel()  # 独立 Toplevel，不传 parent：避免主窗口 withdraw 时被隐藏
-            lw.title('KZC Client')
-            lw.update_idletasks()  # 先完成布局再设置位置
-            lw.overrideredirect(True)  # 去掉标题栏
-            lw.attributes('-topmost', True)  # 永远在最前
-            lw.configure(bg='#2c3e50')
-            # 屏幕右上角
-            sw = lw.winfo_screenwidth()
-            w, h = 200, 80
-            x = sw - w - 20
-            y = 20
-            lw.geometry(f'{w}x{h}+{x}+{y}')
-            # logo 区域
-            tk.Label(lw, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
-                     fg='white', bg='#2c3e50').pack(pady=(8, 0))
-            tk.Label(lw, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
-                     fg='#bdc3c7', bg='#2c3e50').pack()
-            tk.Label(lw, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
-                     fg='#f39c12', bg='#2c3e50').pack()
-            # 在 logo 窗口上绑 H 键（主窗口在 withdrawn 状态下收不到键盘）
-            lw.bind('<Key-h>', self._on_toggle_minimal_key)
-            lw.bind('<Key-H>', self._on_toggle_minimal_key)
-            lw.lift()  # 强制提到最前
-            lw.attributes('-topmost', True)
-            lw.focus_force()  # 让 logo 窗口获得焦点才能收键盘事件
-            lw.update()  # 立即刷新
-            self._logo_window = lw
-            self._minimal_mode = True
-        except Exception as e:
-            print(f'[小logo模式] 启动失败: {e}')
-            self._exit_minimal_mode()
-
-    def _exit_minimal_mode(self):
-        """退出小 logo 模式：显示主窗口，关闭 logo 小窗"""
-        if self._logo_window is not None:
-            try:
-                self._logo_window.destroy()
-            except Exception:
-                pass
-            self._logo_window = None
-        self._minimal_mode = False
-        self.root.update_idletasks()
-        self.root.deiconify()
-        # 在主窗口上绑 H 键以便随时切回 logo 模式
-        self.root.bind('<Key-h>', self._on_toggle_minimal_key)
-        self.root.bind('<Key-H>', self._on_toggle_minimal_key)
-        self.root.focus_force()
-
-    def _on_toggle_minimal_key(self, event=None):
-        """按 H 键切换小 logo 模式"""
-        if self._minimal_mode:
-            self._exit_minimal_mode()
-        else:
+            # 当前显示 → 隐藏
             self.root.withdraw()
-            self.root.after(50, self._enter_minimal_mode)
         return 'break'
 
     def _on_http_command(self, data):

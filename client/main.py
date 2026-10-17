@@ -1936,7 +1936,6 @@ class TerminalApp:
             self.root.attributes('-topmost', False)
             self.root.update_idletasks()
             self.root.geometry('800x680+200+100')
-            _show_root_in_taskbar()
             self.root.lift()
             self.root.focus_force()
             self._main_visible = True
@@ -1959,18 +1958,20 @@ class TerminalApp:
             _kzc_log('  完全隐藏到托盘')
 
     def _enter_logo_mode(self):
-        """进入 logo 模式：root 自身变成 200x80 屏幕右上角小窗，logo overlay 覆盖在原 UI 上"""
-        _kzc_log('_enter_logo_mode 调用')
+        """进入 logo 模式：root 自身变成 200x80 屏幕右上角小窗"""
+        _kzc_log('========== _enter_logo_mode 开始 ==========')
         try:
             self.root.update_idletasks()
             sw = self.root.winfo_screenwidth()
-            # 1) 调整窗口大小到 200x80 + 屏幕右上角
+            sh = self.root.winfo_screenheight()
+            _kzc_log(f'  screen={sw}x{sh}, root_geometry_before={self.root.geometry()}, state={self.root.state()}')
             self.root.overrideredirect(True)
             self.root.attributes('-topmost', True)
-            self.root.geometry(f'200x80+{sw-220}+20')
-            # 2) 用 ctypes 让 root 不进任务栏
-            _hide_root_from_taskbar()
-            # 3) 在 root 上放一个 logo overlay（覆盖在原 800x680 UI 之上）
+            target_x = sw - 220
+            target_y = 20
+            self.root.geometry(f'200x80+{target_x}+{target_y}')
+            self.root.update()
+            _kzc_log(f'  step1 geometry=200x80+{target_x}+{target_y}, 实际={self.root.geometry()}, state={self.root.state()}, viewable={self.root.winfo_viewable()}')
             if not hasattr(self, '_logo_overlay') or self._logo_overlay is None:
                 self._logo_overlay = tk.Frame(self.root, bg='#2c3e50', width=200, height=80)
                 self._logo_overlay.pack_propagate(False)
@@ -1980,12 +1981,12 @@ class TerminalApp:
                          fg='#bdc3c7', bg='#2c3e50').pack()
                 tk.Label(self._logo_overlay, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
                          fg='#f39c12', bg='#2c3e50').pack()
+                _kzc_log('  step2 logo_overlay widget 创建完毕')
             self._logo_overlay.place(x=0, y=0, width=200, height=80)
             self._logo_overlay.lift()
-            self._main_visible = False
-            self.root.update()
             self.root.focus_force()
-            _kzc_log(f'  logo 模式: geometry={self.root.geometry()}')
+            self._main_visible = False
+            _kzc_log(f'========== _enter_logo_mode 完成: geometry={self.root.geometry()}, state={self.root.state()} ==========')
         except Exception as e:
             _kzc_log(f'  logo 启动失败: {e}')
             import traceback
@@ -2600,7 +2601,6 @@ class TerminalApp:
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', True)
         self.root.geometry('1x1+20000+20000')
-        _hide_root_from_taskbar()
         self._main_visible = False
 
     def _quit(self):

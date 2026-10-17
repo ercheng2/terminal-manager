@@ -53,6 +53,39 @@ def _kzc_log(msg):
     except Exception:
         pass
 
+# Win32 API：让 root 不在任务栏显示（直接设 WS_EX_TOOLWINDOW 扩展样式）
+def _hide_root_from_taskbar():
+    """通过 ctypes 设置 root HWND 的扩展样式为 WS_EX_TOOLWINDOW，任务栏不显示主窗口"""
+    import ctypes
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_EX_APPWINDOW = 0x00040000
+    try:
+        hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ex_style |= WS_EX_TOOLWINDOW
+        ex_style &= ~WS_EX_APPWINDOW
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+        _kzc_log(f'_hide_root_from_taskbar: hwnd={hwnd}, ex_style=0x{ex_style:x}')
+    except Exception as e:
+        _kzc_log(f'_hide_root_from_taskbar 失败: {e}')
+
+def _show_root_in_taskbar():
+    """通过 ctypes 恢复 root HWND 的扩展样式，让任务栏显示主窗口"""
+    import ctypes
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_EX_APPWINDOW = 0x00040000
+    try:
+        hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ex_style &= ~WS_EX_TOOLWINDOW
+        ex_style |= WS_EX_APPWINDOW
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+        _kzc_log(f'_show_root_in_taskbar: hwnd={hwnd}, ex_style=0x{ex_style:x}')
+    except Exception as e:
+        _kzc_log(f'_show_root_in_taskbar 失败: {e}')
+
 # Windows注册表支持
 if platform.system() == 'Windows':
     try:
@@ -1880,14 +1913,13 @@ class TerminalApp:
         self._logo_window = None
         self._main_visible = False
         if self.config.get('start_minimal', True):
-            # 启动时主窗口完全 withdraw（任务栏一定不显示）
+            # 启动时主窗口：屏幕外 20000,20000 + 透明 + toolwindow（不 withdraw，让 Toplevel 能正常显示）
             self.root.update_idletasks()
-            self.root.withdraw()
-            # toolwindow 双保险
-            try:
-                self.root.attributes('-toolwindow', True)
-            except Exception:
-                pass
+            self.root.configure(bg='white')
+            self.root.attributes('-transparentcolor', 'white')
+            self.root.geometry('200x150+20000+20000')
+            # ctypes 直接设 WS_EX_TOOLWINDOW：任务栏不显示主窗口
+            _hide_root_from_taskbar()
         # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
@@ -1897,12 +1929,10 @@ class TerminalApp:
         """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
         _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
-            # 当前主窗口可见 → 隐藏（withdraw + toolwindow）
-            self.root.withdraw()
-            try:
-                self.root.attributes('-toolwindow', True)
-            except Exception:
-                pass
+            # 当前主窗口可见 → 隐藏（屏幕外 + 透明 + ctoolwindow）
+            self.root.attributes('-transparentcolor', 'white')
+            self.root.geometry('200x150+20000+20000')
+            _hide_root_from_taskbar()
             self._main_visible = False
             # 重新显示小图标
             if self._logo_window is None:
@@ -1918,13 +1948,10 @@ class TerminalApp:
             except Exception:
                 pass
             self._logo_window = None
-            try:
-                self.root.attributes('-toolwindow', False)  # 主窗口显示时恢复任务栏图标
-            except Exception:
-                pass
+            self.root.attributes('-transparentcolor', '')
             self.root.update_idletasks()
-            self.root.deiconify()
             self.root.geometry('800x680+200+100')
+            _show_root_in_taskbar()
             self.root.lift()
             self.root.focus_force()
             self._main_visible = True
@@ -1946,35 +1973,16 @@ class TerminalApp:
             self._enter_minimal_mode()
 
     def _enter_minimal_mode(self):
-        """进入小图标模式：独立顶级窗（ctypes 解除父依赖），root withdrawn 也能正常显示"""
+        """进入小图标模式：root 激活显示 + Toplevel 依附 + ctypes 设 WS_EX_TOOLWINDOW 不进任务栏"""
         _kzc_log('_enter_minimal_mode 调用')
         if self._logo_window is not None:
             _kzc_log('  已有 logo_window，跳过')
             return
         try:
-            _kzc_log('  1) 创建独立 Toplevel (不传 parent)')
-            lw = tk.Toplevel()  # 不传 parent
+            _kzc_log('  1) 创建 Toplevel(self.root)')
+            lw = tk.Toplevel(self.root)
             lw.title('KZC Client')
-            _kzc_log('  2) ctypes 解除父依赖 + 设 WS_EX_TOOLWINDOW（不在任务栏显示）')
-            try:
-                import ctypes
-                # winfo_id 返回的是 frame HWND；GetParent 拿它的父（Tk 内部 parent）= root HWND
-                frame_hwnd = lw.winfo_id()
-                toplevel_hwnd = ctypes.windll.user32.GetParent(frame_hwnd)
-                # 解除父依赖：让 logo 窗成为真正的顶级窗口（不受 root withdrawn 影响）
-                ctypes.windll.user32.SetParent(toplevel_hwnd, 0)
-                # 设 WS_EX_TOOLWINDOW 让 logo 窗不在任务栏显示
-                GWL_EXSTYLE = -20
-                WS_EX_TOOLWINDOW = 0x00000080
-                WS_EX_APPWINDOW = 0x00040000
-                ex_style = ctypes.windll.user32.GetWindowLongW(toplevel_hwnd, GWL_EXSTYLE)
-                ex_style |= WS_EX_TOOLWINDOW
-                ex_style &= ~WS_EX_APPWINDOW
-                ctypes.windll.user32.SetWindowLongW(toplevel_hwnd, GWL_EXSTYLE, ex_style)
-                _kzc_log(f'    ctypes OK: hwnd={toplevel_hwnd}, ex_style=0x{ex_style:x}')
-            except Exception as e:
-                _kzc_log(f'    ctypes 失败: {e}')
-            _kzc_log('  3) overrideredirect + topmost + geometry')
+            _kzc_log('  2) overrideredirect + topmost + geometry')
             lw.overrideredirect(True)
             lw.attributes('-topmost', True)
             lw.configure(bg='#2c3e50')
@@ -1983,23 +1991,37 @@ class TerminalApp:
             x = sw - w - 20
             y = 20
             lw.geometry(f'{w}x{h}+{x}+{y}')
-            _kzc_log('  4) 加 label')
+            _kzc_log('  3) 加 label')
             tk.Label(lw, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
                      fg='white', bg='#2c3e50').pack(pady=(8, 0))
             tk.Label(lw, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
                      fg='#bdc3c7', bg='#2c3e50').pack()
             tk.Label(lw, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
                      fg='#f39c12', bg='#2c3e50').pack()
-            _kzc_log('  5) deiconify + lift + focus_force + update')
+            _kzc_log('  4) deiconify + lift + focus_force + update')
             lw.deiconify()
             lw.lift()
             lw.attributes('-topmost', True)
             lw.focus_force()
             lw.update()
+            # ctypes 设 logo 窗 WS_EX_TOOLWINDOW：任务栏不显示
+            try:
+                import ctypes
+                GWL_EXSTYLE = -20
+                WS_EX_TOOLWINDOW = 0x00000080
+                WS_EX_APPWINDOW = 0x00040000
+                hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
+                ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                ex_style |= WS_EX_TOOLWINDOW
+                ex_style &= ~WS_EX_APPWINDOW
+                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+                _kzc_log(f'    logo ctypes OK: hwnd={hwnd}, ex_style=0x{ex_style:x}')
+            except Exception as e:
+                _kzc_log(f'    logo ctypes 失败: {e}')
             lw.bind('<Key-h>', self._toggle_main)
             lw.bind('<Key-H>', self._toggle_main)
             self._logo_window = lw
-            _kzc_log(f'  6) 完成: geometry={lw.geometry()}, state={lw.state()}')
+            _kzc_log(f'  5) 完成: geometry={lw.geometry()}, state={lw.state()}')
         except Exception as e:
             _kzc_log(f'  启动失败: {e}')
             print(f'[小图标模式] 启动失败: {e}')
@@ -2605,12 +2627,10 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：withdraw + toolwindow + 重新显示小图标）"""
-        self.root.withdraw()
-        try:
-            self.root.attributes('-toolwindow', True)
-        except Exception:
-            pass
+        """隐藏窗口到托盘（点 X 时调用：屏幕外 + 透明 + ctoolwindow + 重新显示小图标）"""
+        self.root.attributes('-transparentcolor', 'white')
+        self.root.geometry('200x150+20000+20000')
+        _hide_root_from_taskbar()
         self._main_visible = False
         if self._logo_window is None:
             self.root.after(50, self._enter_minimal_mode)

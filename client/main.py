@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     "client_name": "",
     "auto_start": False,
     "minimize_to_tray": False,
-    "start_minimal": True,  # 启动时主窗口完全隐藏+屏幕右上角小图标（防偷窥：H 键是唯一授权方式显示主界面）
+    "start_minimal": True,  # 启动时主窗口完全隐藏（防偷窥双锁：托盘点出小图标 + 按 H 键解锁主窗口）
     "volume_step": 10,
     "delayed_apps": [],
     "startup_items": [],
@@ -284,6 +284,11 @@ def _on_tray_show(icon, item):
         _tray_root_ref.after(0, _tray_root_ref.deiconify)
         _tray_root_ref.after(0, _tray_root_ref.lift)
 
+def _on_tray_toggle_logo(icon, item):
+    """托盘点击：切换小图标显示/隐藏（防偷窥第一步）"""
+    if _tray_root_ref and hasattr(_tray_root_ref, '_toggle_logo'):
+        _tray_root_ref.after(0, _tray_root_ref._toggle_logo)
+
 def _on_tray_quit(icon, item):
     """真正退出程序"""
     global _tray_icon
@@ -301,8 +306,9 @@ def _start_tray(root):
         return
     try:
         _tray_root_ref = root
-        # 防偷窥：托盘菜单不提供"显示主窗口"项（别人点也没用），只保留"退出程序"
+        # 防偷窥双锁：托盘菜单第一步（点"显示小图标"） + H 键第二步（解锁主窗口）
         menu = pystray.Menu(
+            pystray.MenuItem('显示/隐藏小图标', _on_tray_toggle_logo),
             pystray.MenuItem('退出程序', _on_tray_quit),
         )
         _tray_icon = pystray.Icon(
@@ -1859,36 +1865,52 @@ class TerminalApp:
         # 记录是否需要启动时最小化到托盘
         self._start_minimized = self.config.get('minimize_to_tray', False)
 
-        # === 启动模式：默认只显示小图标（防偷窥：H 键是唯一授权方式显示主界面）===
+        # === 启动模式：全隐藏（防偷窥双锁：先点托盘出小图标，再按 H 键才显示主界面）===
         self._logo_window = None
         if self.config.get('start_minimal', True):
-            # 启动时主窗口完全隐藏 + 显示屏幕右上角小图标
+            # 启动时主窗口完全隐藏（小图标 = None，等托盘点击才创建）
             self.root.update_idletasks()
             self.root.withdraw()
-            self.root.after(100, self._enter_minimal_mode)
-        # 主窗口上绑 H 键：唯一授权方式切换主界面显示/隐藏
+        # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
 
     def _toggle_main(self, event=None):
-        """按 H 键切换主窗口显隐（防偷窥设计：H 键是唯一授权方式）"""
+        """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
         if self.root.state() == 'withdrawn':
-            # 当前隐藏（可能在 logo 模式）→ 显示主窗口，关闭 logo 小窗
-            if self._logo_window is not None:
-                try:
-                    self._logo_window.destroy()
-                except Exception:
-                    pass
-                self._logo_window = None
+            # 主窗口不可见 → 检查是否在小图标态
+            if self._logo_window is None:
+                # 没有小图标，提示用户先点托盘（双锁机制）
+                print('[防偷窥] 请先点托盘图标显示小图标，再按 H 键解锁')
+                return 'break'
+            # 有小图标 → 关闭小图标 + 显示主窗口
+            try:
+                self._logo_window.destroy()
+            except Exception:
+                pass
+            self._logo_window = None
             self.root.update_idletasks()
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
         else:
-            # 当前显示 → 隐藏主窗口，重新显示 logo 小窗
+            # 主窗口可见 → 隐藏主窗口 + 重新显示小图标
             self.root.withdraw()
             self.root.after(50, self._enter_minimal_mode)
         return 'break'
+
+    def _toggle_logo(self):
+        """托盘点击：切换小图标显示/隐藏（防偷窥第一步）"""
+        if self._logo_window is not None:
+            # 已经在显示 → 隐藏
+            try:
+                self._logo_window.destroy()
+            except Exception:
+                pass
+            self._logo_window = None
+        else:
+            # 不显示 → 显示小图标
+            self._enter_minimal_mode()
 
     def _enter_minimal_mode(self):
         """进入小图标模式：在屏幕右上角显示 logo 小窗（防偷窥，仅自己人按 H 才会显示主界面）"""
@@ -2524,8 +2546,10 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘"""
+        """隐藏窗口到托盘（点 X 时调用：withdraw + 重新显示小图标）"""
         self.root.withdraw()  # 隐藏窗口
+        if self._logo_window is None:
+            self.root.after(50, self._enter_minimal_mode)
 
     def _quit(self):
         """真正退出程序"""

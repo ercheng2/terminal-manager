@@ -1928,10 +1928,16 @@ class TerminalApp:
             except Exception:
                 pass
             self.root.update_idletasks()
+            # 保险：先 deiconify 确保 root 不是 withdrawn/withdraw 状态
+            try:
+                self.root.deiconify()
+            except Exception:
+                pass
             self.root.geometry('800x680+200+100')
             self.root.lift()
             self.root.focus_force()
             self._main_visible = True
+            _kzc_log('主窗口已显示')
         return 'break'
 
     def _toggle_logo(self):

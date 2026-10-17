@@ -6105,32 +6105,34 @@ class ServerGUI:
 
 
 
-        # 并排容器：客户端激活 + 设备电源管理
+        # 并排容器：客户端激活(70%) + 设备电源管理(30%)
         self.act_power_row = tk.Frame(right_frame)
         self.act_power_row.pack(fill='x', padx=10, pady=5)
+        self.act_power_row.columnconfigure(0, weight=3)  # 客户端激活占大头
+        self.act_power_row.columnconfigure(1, weight=1)  # 设备电源管理窄一些
 
         # 设备电源管理模块（每台设备单独设置）
         self.device_power_frame = tk.LabelFrame(self.act_power_row, text=' ⚡ 设备电源管理 ', font=('Microsoft YaHei', 10, 'bold'))
-        self.device_power_frame.pack(side='left', fill='both', expand=True, padx=(0, 4))
+        self.device_power_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 0))
         # 第一行：当前选中设备信息
         self.device_power_top_row = tk.Frame(self.device_power_frame)
-        self.device_power_top_row.pack(padx=8, pady=(6, 2), fill='x')
+        self.device_power_top_row.pack(padx=6, pady=(6, 2), fill='x')
         tk.Label(self.device_power_top_row, text='当前设备：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.device_power_name_var = tk.StringVar(value='（请先点选左侧设备）')
         tk.Label(self.device_power_top_row, textvariable=self.device_power_name_var, font=('Microsoft YaHei', 9, 'bold'), fg='#2980b9').pack(side='left', padx=3)
         # 第二行：定时关机时间
         self.device_power_row = tk.Frame(self.device_power_frame)
-        self.device_power_row.pack(padx=8, pady=(2, 6), fill='x')
-        tk.Label(self.device_power_row, text='定时关机（HH:MM）：', font=('Microsoft YaHei', 9)).pack(side='left', padx=(0, 5))
+        self.device_power_row.pack(padx=6, pady=(2, 6), fill='x')
+        tk.Label(self.device_power_row, text='定时关机（HH:MM）：', font=('Microsoft YaHei', 9)).pack(side='left', padx=(0, 4))
         self.device_shutdown_time_var = tk.StringVar(value='')
-        tk.Entry(self.device_power_row, textvariable=self.device_shutdown_time_var, width=7, font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
+        tk.Entry(self.device_power_row, textvariable=self.device_shutdown_time_var, width=6, font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
         tk.Button(self.device_power_row, text='保存', width=5, bg='#3498db', fg='white',
-                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_device_shutdown_time).pack(side='left', padx=5)
-        tk.Label(self.device_power_row, text='留空=禁用', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=5)
+                 font=('Microsoft YaHei', 9, 'bold'), command=self._save_device_shutdown_time).pack(side='left', padx=4)
+        tk.Label(self.device_power_row, text='空=禁', font=('Microsoft YaHei', 8), fg='#7f8c8d').pack(side='left', padx=2)
 
         # 客户端激活模块（按设备显示/操作）
         self.activation_frame = tk.LabelFrame(self.act_power_row, text=' 🔑 客户端激活 ', font=('Microsoft YaHei', 10, 'bold'))
-        self.activation_frame.pack(side='left', fill='both', expand=True, padx=(4, 0))
+        self.activation_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
         # 第一行：当前设备 + 激活状态
         act_row1 = tk.Frame(self.activation_frame)
         act_row1.pack(padx=8, pady=(6, 2), fill='x')
@@ -6142,35 +6144,35 @@ class ServerGUI:
         self.act_status_label.pack(side='right', padx=5)
         # 第二行：序列号
         act_row2 = tk.Frame(self.activation_frame)
-        act_row2.pack(padx=8, pady=2, fill='x')
+        act_row2.pack(padx=6, pady=2, fill='x')
         tk.Label(act_row2, text='机器序列号：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.act_serial_var = tk.StringVar(value='（请先点选左侧设备）')
         self.act_serial_entry = tk.Entry(act_row2, textvariable=self.act_serial_var, font=('Consolas', 9), state='readonly', readonlybackground='#f5f5f5', fg='#2c3e50')
-        tk.Button(act_row2, text='📋 复制', width=6, bg='#95a5a6', fg='white',
+        tk.Button(act_row2, text='复制', width=5, bg='#95a5a6', fg='white',
                  font=('Microsoft YaHei', 9), command=self._copy_serial).pack(side='right', padx=(2, 0))
         self.act_serial_entry.pack(side='left', fill='x', expand=True, padx=2)
         # 第二行半：手动输入序列号（兜底老客户端未自动上报）
         act_row2b = tk.Frame(self.activation_frame)
-        act_row2b.pack(padx=8, pady=(0, 2), fill='x')
+        act_row2b.pack(padx=6, pady=(0, 2), fill='x')
         tk.Label(act_row2b, text='手动序列号：', font=('Microsoft YaHei', 9), fg='#7f8c8d').pack(side='left')
         self.act_manual_var = tk.StringVar(value='')
         self.act_manual_entry = tk.Entry(act_row2b, textvariable=self.act_manual_var, font=('Consolas', 9), fg='#7f8c8d', state='disabled', disabledforeground='#bdc3c7')
-        self.act_apply_btn = tk.Button(act_row2b, text='⬇️ 采用', width=6, bg='#bdc3c7', fg='white',
+        self.act_apply_btn = tk.Button(act_row2b, text='采用', width=5, bg='#bdc3c7', fg='white',
                  font=('Microsoft YaHei', 9), state='disabled', command=self._apply_manual_serial)
         self.act_apply_btn.pack(side='right', padx=(2, 0))
         self.act_manual_entry.pack(side='left', fill='x', expand=True, padx=2)
         # 提示放第二行（避免挤掉采用按钮）
         act_row2c = tk.Frame(self.activation_frame)
-        act_row2c.pack(padx=8, pady=(0, 2), fill='x')
+        act_row2c.pack(padx=6, pady=(0, 2), fill='x')
         tk.Label(act_row2c, text='↑ 老客户端未自动上报时手动填入', font=('Microsoft YaHei', 8), fg='#95a5a6').pack(side='right', padx=4)
         # 第三行：远程激活（用户填注册码，服务器推送到客户端）
         act_row3 = tk.Frame(self.activation_frame)
-        act_row3.pack(padx=8, pady=(2, 6), fill='x')
+        act_row3.pack(padx=6, pady=(2, 6), fill='x')
         tk.Label(act_row3, text='激活码：', font=('Microsoft YaHei', 9)).pack(side='left')
         self.act_user_key_var = tk.StringVar(value='')
         self.act_user_key_entry = tk.Entry(act_row3, textvariable=self.act_user_key_var, font=('Consolas', 10), fg='#c0392b', state='disabled', disabledforeground='#bdc3c7')
         self.act_user_key_entry.pack(side='left', fill='x', expand=True, padx=2)
-        self.act_push_btn = tk.Button(act_row3, text='🚀 激活客户端', width=12, bg='#bdc3c7', fg='white',
+        self.act_push_btn = tk.Button(act_row3, text='激活客户端', width=10, bg='#bdc3c7', fg='white',
                  font=('Microsoft YaHei', 9, 'bold'), state='disabled', command=self._push_user_activation)
         self.act_push_btn.pack(side='right', padx=(2, 0))
 

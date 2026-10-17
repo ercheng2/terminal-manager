@@ -42,6 +42,17 @@ try:
 except ImportError:
     HAS_PYSTRAY = False
 
+# 防偷窥调试日志（写到桌面）
+import os as _os_log
+import time as _time_log
+def _kzc_log(msg):
+    try:
+        log_path = _os_log.path.join(_os_log.path.expanduser('~'), 'kzc_client.log')
+        with open(log_path, 'a', encoding='utf-8') as _f:
+            _f.write(f'[{_time_log.strftime("%H:%M:%S")}] {msg}\n')
+    except Exception:
+        pass
+
 # Windows注册表支持
 if platform.system() == 'Windows':
     try:
@@ -1869,22 +1880,24 @@ class TerminalApp:
         self._logo_window = None
         self._main_visible = False
         if self.config.get('start_minimal', True):
-            # 启动时主窗口完全透明 + 1x1 + 屏幕外（root 永远激活，Toplevel logo 不受影响）
+            # 启动时主窗口：屏幕外 20000,20000 + bg=white + transparentcolor=white
+            # 关键：root 必须处于"激活显示"状态，Toplevel 才能正常显示
             self.root.update_idletasks()
-            self.root.attributes('-alpha', 0.0)
-            self.root.geometry(f'1x1+30000+30000')
-            self.root.overrideredirect(True)
+            self.root.configure(bg='white')
+            self.root.attributes('-transparentcolor', 'white')
+            self.root.geometry('200x150+20000+20000')
         # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
+        _kzc_log(f'启动完成: start_minimal={self.config.get("start_minimal", True)}')
 
     def _toggle_main(self, event=None):
         """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
+        _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
-            # 当前主窗口可见 → 隐藏（alpha=0 + 1x1 屏幕外）
-            self.root.attributes('-alpha', 0.0)
-            self.root.geometry(f'1x1+30000+30000')
-            self.root.overrideredirect(True)
+            # 当前主窗口可见 → 隐藏（屏幕外 + transparentcolor）
+            self.root.attributes('-transparentcolor', 'white')
+            self.root.geometry('200x150+20000+20000')
             self._main_visible = False
             # 重新显示小图标
             if self._logo_window is None:
@@ -1892,19 +1905,17 @@ class TerminalApp:
         else:
             # 当前主窗口不可见 → 检查是否在小图标态（双锁）
             if self._logo_window is None:
-                # 没有小图标，提示用户先点托盘（双锁机制）
-                print('[防偷窥] 请先点托盘图标显示小图标，再按 H 键解锁')
+                _kzc_log('H 键: 无小图标，拒绝解锁')
                 return 'break'
-            # 有小图标 → 关闭小图标 + 显示主窗口（alpha=1 + 800x680 + 有标题栏）
+            # 有小图标 → 关闭小图标 + 显示主窗口
             try:
                 self._logo_window.destroy()
             except Exception:
                 pass
             self._logo_window = None
-            self.root.overrideredirect(False)
+            self.root.attributes('-transparentcolor', '')
             self.root.update_idletasks()
             self.root.geometry('800x680+200+100')
-            self.root.attributes('-alpha', 1.0)
             self.root.lift()
             self.root.focus_force()
             self._main_visible = True
@@ -1912,6 +1923,7 @@ class TerminalApp:
 
     def _toggle_logo(self):
         """托盘点击：切换小图标显示/隐藏（防偷窥第一步）"""
+        _kzc_log(f'托盘点击: logo={self._logo_window is not None}')
         if self._logo_window is not None:
             # 已经在显示 → 隐藏
             try:
@@ -1925,12 +1937,15 @@ class TerminalApp:
 
     def _enter_minimal_mode(self):
         """进入小图标模式：在屏幕右上角显示 logo 小窗（防偷窥，仅自己人按 H 才会显示主界面）"""
+        _kzc_log('_enter_minimal_mode 调用')
         if self._logo_window is not None:
+            _kzc_log('  已有 logo_window，跳过')
             return
         try:
-            lw = tk.Toplevel()  # 独立 Toplevel，不传 parent
+            _kzc_log('  1) 创建 Toplevel')
+            lw = tk.Toplevel(self.root)  # 这次传 parent=self.root，让它依附于激活的 root
             lw.title('KZC Client')
-            lw.update_idletasks()
+            _kzc_log('  2) overrideredirect + topmost')
             lw.overrideredirect(True)
             lw.attributes('-topmost', True)
             lw.configure(bg='#2c3e50')
@@ -1939,21 +1954,24 @@ class TerminalApp:
             x = sw - w - 20
             y = 20
             lw.geometry(f'{w}x{h}+{x}+{y}')
+            _kzc_log('  3) 加 label')
             tk.Label(lw, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
                      fg='white', bg='#2c3e50').pack(pady=(8, 0))
             tk.Label(lw, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
                      fg='#bdc3c7', bg='#2c3e50').pack()
             tk.Label(lw, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
                      fg='#f39c12', bg='#2c3e50').pack()
+            _kzc_log('  4) lift + focus_force + update')
             lw.lift()
             lw.attributes('-topmost', True)
             lw.focus_force()
             lw.update()
-            # 在 logo 窗口上绑 H 键（主窗口 withdrawn 时收不到键盘）
             lw.bind('<Key-h>', self._toggle_main)
             lw.bind('<Key-H>', self._toggle_main)
             self._logo_window = lw
+            _kzc_log(f'  5) 完成: geometry={lw.geometry()}, state={lw.state()}')
         except Exception as e:
+            _kzc_log(f'  启动失败: {e}')
             print(f'[小图标模式] 启动失败: {e}')
 
     def _on_http_command(self, data):
@@ -2557,10 +2575,9 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：alpha=0 隐藏 + 重新显示小图标）"""
-        self.root.attributes('-alpha', 0.0)
-        self.root.geometry(f'1x1+30000+30000')
-        self.root.overrideredirect(True)
+        """隐藏窗口到托盘（点 X 时调用：透明 + 屏幕外 + 重新显示小图标）"""
+        self.root.attributes('-transparentcolor', 'white')
+        self.root.geometry('200x150+20000+20000')
         self._main_visible = False
         if self._logo_window is None:
             self.root.after(50, self._enter_minimal_mode)

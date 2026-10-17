@@ -110,7 +110,7 @@ DEFAULT_CONFIG = {
     "client_name": "",
     "auto_start": False,
     "minimize_to_tray": False,
-    "start_minimal": True,  # 启动时主窗口完全隐藏（防偷窥双锁：托盘点出小图标 + 按 H 键解锁主窗口）
+    "start_minimal": True,  # 启动时主窗口缩成 200x80 logo 小图标在屏幕右上角，按 H 键扩到 800x680
     "volume_step": 10,
     "delayed_apps": [],
     "startup_items": [],
@@ -1912,48 +1912,28 @@ class TerminalApp:
         # === 启动模式：全隐藏（防偷窥双锁：先点托盘出小图标，再按 H 键才显示主界面）===
         self._logo_window = None
         self._main_visible = False
-        if self.config.get('start_minimal', True):
-            # 启动时主窗口：四重隐藏（永不 withdraw 保持激活态让 Toplevel 能正常显示）
-            # 1) overrideredirect=True 去掉标题栏
-            # 2) alpha=0 完全透明
-            # 3) geometry 屏幕外 20000,20000
-            # 4) ctypes 设 WS_EX_TOOLWINDOW 不进任务栏
-            self.root.update_idletasks()
-            self.root.overrideredirect(True)
-            self.root.attributes('-alpha', 0.0)
-            self.root.geometry('200x150+20000+20000')
-            _hide_root_from_taskbar()
-        # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
+        # 不管 start_minimal，先绑 H 键
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
+        if self.config.get('start_minimal', True):
+            # 启动后延迟 200ms 切到 logo 态（让 _build_ui 的 widget 先建好）
+            self.root.after(200, self._enter_logo_mode)
         _kzc_log(f'启动完成: start_minimal={self.config.get("start_minimal", True)}')
 
     def _toggle_main(self, event=None):
-        """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
-        _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
+        """按 H 键：logo 态 ↔ 主窗口态 切换（root 自身窗口）"""
+        _kzc_log(f'H 键: main_visible={self._main_visible}')
         if self._main_visible:
-            # 当前主窗口可见 → 隐藏（overrideredirect + alpha=0 + 屏幕外 + ctoolwindow）
-            self.root.overrideredirect(True)
-            self.root.attributes('-alpha', 0.0)
-            self.root.geometry('200x150+20000+20000')
-            _hide_root_from_taskbar()
-            self._main_visible = False
-            # 重新显示小图标
-            if self._logo_window is None:
-                self.root.after(50, self._enter_minimal_mode)
+            # 当前主窗口 → 切回 logo 模式
+            self._enter_logo_mode()
         else:
-            # 当前主窗口不可见 → 检查是否在小图标态（双锁）
-            if self._logo_window is None:
-                _kzc_log('H 键: 无小图标，拒绝解锁')
-                return 'break'
-            # 有小图标 → 关闭小图标 + 显示主窗口
+            # 当前 logo → 显示主窗口
             try:
-                self._logo_window.destroy()
+                self._logo_overlay.place_forget()
             except Exception:
                 pass
-            self._logo_window = None
             self.root.overrideredirect(False)
-            self.root.attributes('-alpha', 1.0)
+            self.root.attributes('-topmost', False)
             self.root.update_idletasks()
             self.root.geometry('800x680+200+100')
             _show_root_in_taskbar()
@@ -1964,72 +1944,52 @@ class TerminalApp:
         return 'break'
 
     def _toggle_logo(self):
-        """托盘点击：切换小图标显示/隐藏（防偷窥第一步）"""
-        _kzc_log(f'托盘点击: logo={self._logo_window is not None}')
-        if self._logo_window is not None:
-            # 已经在显示 → 隐藏
+        """托盘点击：切换 logo 模式（防偷窥第一步）"""
+        _kzc_log(f'托盘点击: main_visible={self._main_visible}')
+        if getattr(self, '_main_visible', False):
+            # 当前主窗口可见 → 切回 logo 模式
+            self._enter_logo_mode()
+        else:
+            # 当前是 logo 模式 → 完全隐藏（仅托盘图标）
             try:
-                self._logo_window.destroy()
+                self._logo_overlay.place_forget()
             except Exception:
                 pass
-            self._logo_window = None
-        else:
-            # 不显示 → 显示小图标
-            self._enter_minimal_mode()
+            self.root.geometry('1x1+20000+20000')
+            _kzc_log('  完全隐藏到托盘')
 
-    def _enter_minimal_mode(self):
-        """进入小图标模式：root 激活显示 + Toplevel 依附 + ctypes 设 WS_EX_TOOLWINDOW 不进任务栏"""
-        _kzc_log('_enter_minimal_mode 调用')
-        if self._logo_window is not None:
-            _kzc_log('  已有 logo_window，跳过')
-            return
+    def _enter_logo_mode(self):
+        """进入 logo 模式：root 自身变成 200x80 屏幕右上角小窗，logo overlay 覆盖在原 UI 上"""
+        _kzc_log('_enter_logo_mode 调用')
         try:
-            _kzc_log('  1) 创建 Toplevel(self.root)')
-            lw = tk.Toplevel(self.root)
-            lw.title('KZC Client')
-            _kzc_log('  2) overrideredirect + topmost + geometry')
-            lw.overrideredirect(True)
-            lw.attributes('-topmost', True)
-            lw.configure(bg='#2c3e50')
-            sw = lw.winfo_screenwidth()
-            w, h = 200, 80
-            x = sw - w - 20
-            y = 20
-            lw.geometry(f'{w}x{h}+{x}+{y}')
-            _kzc_log('  3) 加 label')
-            tk.Label(lw, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
-                     fg='white', bg='#2c3e50').pack(pady=(8, 0))
-            tk.Label(lw, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
-                     fg='#bdc3c7', bg='#2c3e50').pack()
-            tk.Label(lw, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
-                     fg='#f39c12', bg='#2c3e50').pack()
-            _kzc_log('  4) deiconify + lift + focus_force + update')
-            lw.deiconify()
-            lw.lift()
-            lw.attributes('-topmost', True)
-            lw.focus_force()
-            lw.update()
-            # ctypes 设 logo 窗 WS_EX_TOOLWINDOW：任务栏不显示
-            try:
-                import ctypes
-                GWL_EXSTYLE = -20
-                WS_EX_TOOLWINDOW = 0x00000080
-                WS_EX_APPWINDOW = 0x00040000
-                hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
-                ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                ex_style |= WS_EX_TOOLWINDOW
-                ex_style &= ~WS_EX_APPWINDOW
-                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
-                _kzc_log(f'    logo ctypes OK: hwnd={hwnd}, ex_style=0x{ex_style:x}')
-            except Exception as e:
-                _kzc_log(f'    logo ctypes 失败: {e}')
-            lw.bind('<Key-h>', self._toggle_main)
-            lw.bind('<Key-H>', self._toggle_main)
-            self._logo_window = lw
-            _kzc_log(f'  5) 完成: geometry={lw.geometry()}, state={lw.state()}')
+            self.root.update_idletasks()
+            sw = self.root.winfo_screenwidth()
+            # 1) 调整窗口大小到 200x80 + 屏幕右上角
+            self.root.overrideredirect(True)
+            self.root.attributes('-topmost', True)
+            self.root.geometry(f'200x80+{sw-220}+20')
+            # 2) 用 ctypes 让 root 不进任务栏
+            _hide_root_from_taskbar()
+            # 3) 在 root 上放一个 logo overlay（覆盖在原 800x680 UI 之上）
+            if not hasattr(self, '_logo_overlay') or self._logo_overlay is None:
+                self._logo_overlay = tk.Frame(self.root, bg='#2c3e50', width=200, height=80)
+                self._logo_overlay.pack_propagate(False)
+                tk.Label(self._logo_overlay, text='🖥️ 坤展成', font=('Microsoft YaHei', 11, 'bold'),
+                         fg='white', bg='#2c3e50').pack(pady=(8, 0))
+                tk.Label(self._logo_overlay, text='客户端 v1.4.0', font=('Microsoft YaHei', 8),
+                         fg='#bdc3c7', bg='#2c3e50').pack()
+                tk.Label(self._logo_overlay, text='按 H 键显示主界面', font=('Microsoft YaHei', 8),
+                         fg='#f39c12', bg='#2c3e50').pack()
+            self._logo_overlay.place(x=0, y=0, width=200, height=80)
+            self._logo_overlay.lift()
+            self._main_visible = False
+            self.root.update()
+            self.root.focus_force()
+            _kzc_log(f'  logo 模式: geometry={self.root.geometry()}')
         except Exception as e:
-            _kzc_log(f'  启动失败: {e}')
-            print(f'[小图标模式] 启动失败: {e}')
+            _kzc_log(f'  logo 启动失败: {e}')
+            import traceback
+            traceback.print_exc()
 
     def _on_http_command(self, data):
         """HTTP轮询收到指令"""
@@ -2632,14 +2592,16 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：四重隐藏 + 重新显示小图标）"""
+        """点 X：完全隐藏到托盘（不再回 logo）"""
+        try:
+            self._logo_overlay.place_forget()
+        except Exception:
+            pass
         self.root.overrideredirect(True)
-        self.root.attributes('-alpha', 0.0)
-        self.root.geometry('200x150+20000+20000')
+        self.root.attributes('-topmost', True)
+        self.root.geometry('1x1+20000+20000')
         _hide_root_from_taskbar()
         self._main_visible = False
-        if self._logo_window is None:
-            self.root.after(50, self._enter_minimal_mode)
 
     def _quit(self):
         """真正退出程序"""

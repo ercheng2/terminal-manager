@@ -1913,12 +1913,15 @@ class TerminalApp:
         self._logo_window = None
         self._main_visible = False
         if self.config.get('start_minimal', True):
-            # 启动时主窗口：屏幕外 20000,20000 + 透明 + toolwindow（不 withdraw，让 Toplevel 能正常显示）
+            # 启动时主窗口：四重隐藏（永不 withdraw 保持激活态让 Toplevel 能正常显示）
+            # 1) overrideredirect=True 去掉标题栏
+            # 2) alpha=0 完全透明
+            # 3) geometry 屏幕外 20000,20000
+            # 4) ctypes 设 WS_EX_TOOLWINDOW 不进任务栏
             self.root.update_idletasks()
-            self.root.configure(bg='white')
-            self.root.attributes('-transparentcolor', 'white')
+            self.root.overrideredirect(True)
+            self.root.attributes('-alpha', 0.0)
             self.root.geometry('200x150+20000+20000')
-            # ctypes 直接设 WS_EX_TOOLWINDOW：任务栏不显示主窗口
             _hide_root_from_taskbar()
         # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
@@ -1929,8 +1932,9 @@ class TerminalApp:
         """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
         _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
-            # 当前主窗口可见 → 隐藏（屏幕外 + 透明 + ctoolwindow）
-            self.root.attributes('-transparentcolor', 'white')
+            # 当前主窗口可见 → 隐藏（overrideredirect + alpha=0 + 屏幕外 + ctoolwindow）
+            self.root.overrideredirect(True)
+            self.root.attributes('-alpha', 0.0)
             self.root.geometry('200x150+20000+20000')
             _hide_root_from_taskbar()
             self._main_visible = False
@@ -1948,7 +1952,8 @@ class TerminalApp:
             except Exception:
                 pass
             self._logo_window = None
-            self.root.attributes('-transparentcolor', '')
+            self.root.overrideredirect(False)
+            self.root.attributes('-alpha', 1.0)
             self.root.update_idletasks()
             self.root.geometry('800x680+200+100')
             _show_root_in_taskbar()
@@ -2627,8 +2632,9 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：屏幕外 + 透明 + ctoolwindow + 重新显示小图标）"""
-        self.root.attributes('-transparentcolor', 'white')
+        """隐藏窗口到托盘（点 X 时调用：四重隐藏 + 重新显示小图标）"""
+        self.root.overrideredirect(True)
+        self.root.attributes('-alpha', 0.0)
         self.root.geometry('200x150+20000+20000')
         _hide_root_from_taskbar()
         self._main_visible = False

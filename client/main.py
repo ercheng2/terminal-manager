@@ -1885,6 +1885,11 @@ class TerminalApp:
             self.root.update_idletasks()
             self.root.configure(bg='white')
             self.root.attributes('-transparentcolor', 'white')
+            # -toolwindow 让 root 不在任务栏显示（关键！这样任务栏看不到主窗口）
+            try:
+                self.root.attributes('-toolwindow', True)
+            except Exception:
+                pass
             self.root.geometry('200x150+20000+20000')
         # 主窗口上绑 H 键：第二步授权（小图标态 → 主窗口态 / 主窗口态 → 小图标态）
         self.root.bind('<Key-h>', self._toggle_main)
@@ -1895,8 +1900,12 @@ class TerminalApp:
         """按 H 键切换主窗口显隐（防偷窥：必须先点托盘出小图标，按 H 才会显示主界面）"""
         _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
-            # 当前主窗口可见 → 隐藏（屏幕外 + transparentcolor）
+            # 当前主窗口可见 → 隐藏（屏幕外 + transparentcolor + toolwindow 不进任务栏）
             self.root.attributes('-transparentcolor', 'white')
+            try:
+                self.root.attributes('-toolwindow', True)
+            except Exception:
+                pass
             self.root.geometry('200x150+20000+20000')
             self._main_visible = False
             # 重新显示小图标
@@ -1914,6 +1923,10 @@ class TerminalApp:
                 pass
             self._logo_window = None
             self.root.attributes('-transparentcolor', '')
+            try:
+                self.root.attributes('-toolwindow', False)  # 主窗口显示时恢复任务栏图标
+            except Exception:
+                pass
             self.root.update_idletasks()
             self.root.geometry('800x680+200+100')
             self.root.lift()
@@ -2575,8 +2588,12 @@ class TerminalApp:
         self.root.after(3000, self._refresh_status)
 
     def _hide_to_tray(self):
-        """隐藏窗口到托盘（点 X 时调用：透明 + 屏幕外 + 重新显示小图标）"""
+        """隐藏窗口到托盘（点 X 时调用：透明 + 屏幕外 + toolwindow + 重新显示小图标）"""
         self.root.attributes('-transparentcolor', 'white')
+        try:
+            self.root.attributes('-toolwindow', True)
+        except Exception:
+            pass
         self.root.geometry('200x150+20000+20000')
         self._main_visible = False
         if self._logo_window is None:

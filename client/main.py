@@ -1877,8 +1877,9 @@ class TerminalApp:
         if self._logo_window is not None:
             return
         try:
-            lw = tk.Toplevel(self.root)
+            lw = tk.Toplevel()  # 独立 Toplevel，不传 parent：避免主窗口 withdraw 时被隐藏
             lw.title('KZC Client')
+            lw.update_idletasks()  # 先完成布局再设置位置
             lw.overrideredirect(True)  # 去掉标题栏
             lw.attributes('-topmost', True)  # 永远在最前
             lw.configure(bg='#2c3e50')
@@ -1898,7 +1899,10 @@ class TerminalApp:
             # 在 logo 窗口上绑 H 键（主窗口在 withdrawn 状态下收不到键盘）
             lw.bind('<Key-h>', self._on_toggle_minimal_key)
             lw.bind('<Key-H>', self._on_toggle_minimal_key)
+            lw.lift()  # 强制提到最前
+            lw.attributes('-topmost', True)
             lw.focus_force()  # 让 logo 窗口获得焦点才能收键盘事件
+            lw.update()  # 立即刷新
             self._logo_window = lw
             self._minimal_mode = True
         except Exception as e:

@@ -1566,13 +1566,23 @@ async def client_register(request: Request):
 
                     _clients[client_id]['disk_percent'] = float(data['disk_percent'])
 
-
-
                 except:
-
-
-
                     pass
+
+
+
+            # 同步激活信息（serial/activated）和系统元信息：老客户端升级走 else 分支时旧记录里没这些字段
+            if data.get('serial'):
+                _clients[client_id]['serial'] = data['serial']
+            _clients[client_id]['activated'] = bool(data.get('activated', False))
+            if data.get('os'):
+                _clients[client_id]['os'] = data['os']
+            if data.get('os_version'):
+                _clients[client_id]['os_version'] = data['os_version']
+            if data.get('arch'):
+                _clients[client_id]['arch'] = data['arch']
+            if data.get('cpu'):
+                _clients[client_id]['cpu'] = data['cpu']
 
 
 

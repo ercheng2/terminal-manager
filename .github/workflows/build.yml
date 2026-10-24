@@ -23,7 +23,7 @@ jobs:
       - name: Build client exe
         run: |
           cd client
-          pyinstaller --name "TerminalManager-Client" --onefile --windowed --icon=icon.ico --add-data "icon.ico;." --hidden-import pystray --hidden-import PIL --hidden-import psutil --hidden-import urllib --hidden-import mss --hidden-import pyautogui --hidden-import python_xlib --clean main.py
+          pyinstaller --name "TerminalManager-Client" --onefile --windowed --icon=icon.ico --add-data "icon.ico;." --hidden-import pystray --hidden-import PIL --hidden-import psutil --hidden-import urllib --hidden-import mss --hidden-import pyautogui --hidden-import python_xlib --hidden-import PIL.Image --hidden-import PIL.ImageTk --hidden-import PIL.ImageDraw --clean main.py
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
         with:
@@ -98,7 +98,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.0
+          tag_name: v1.5.0
+          name: TerminalManager v1.5.0
           files: |
             release/TerminalManager-Client.exe
             release/TerminalManager-Server.exe

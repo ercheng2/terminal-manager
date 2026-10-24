@@ -110,7 +110,7 @@ DEFAULT_CONFIG = {
     "client_name": "",
     "auto_start": False,
     "minimize_to_tray": False,
-    "start_minimal": True,  # 启动时主窗口缩成 200x80 logo 小图标在屏幕右上角，按 H 键扩到 800x680
+    "start_minimal": True,  # 启动时隐藏到托盘（屏幕右上角不出 logo）；点托盘"显示/隐藏小图标"才浮出 logo，logo 上点 X 可关闭，点图标聚焦后按 H 展开主界面
     "volume_step": 10,
     "delayed_apps": [],
     "startup_items": [],
@@ -1859,6 +1859,13 @@ class TerminalApp:
     def __init__(self):
         self.config = load_config()
         self.root = tk.Tk()
+        # 启动即隐藏（start_minimal），避免主窗口闪现；logo 由托盘菜单唤出
+        self._start_hidden = bool(self.config.get('start_minimal', True))
+        if self._start_hidden:
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
         icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
@@ -1909,19 +1916,49 @@ class TerminalApp:
         # 记录是否需要启动时最小化到托盘
         self._start_minimized = self.config.get('minimize_to_tray', False)
 
-        # === 启动模式：全隐藏（防偷窥双锁：先点托盘出小图标，再按 H 键才显示主界面）===
+        # === 启动模式：全隐藏（防偷窥双锁：先点托盘"显示/隐藏小图标"出小图标，再按 H 键才显示主界面）===
         self._logo_window = None
+        self._logo_canvas = None
+        self._logo_hwnd = None
+        self._logo_hint = None
         self._main_visible = False
+        self._toggle_ts = 0.0      # H 键防抖时间戳
+        self._h_signal = queue.Queue()   # Win32 监听线程 -> 主线程 的信号
         # 不管 start_minimal，先绑 H 键
         self.root.bind('<Key-h>', self._toggle_main)
         self.root.bind('<Key-H>', self._toggle_main)
         if self.config.get('start_minimal', True):
-            # 启动后延迟 200ms 切到 logo 态（让 _build_ui 的 widget 先建好）
-            self.root.after(200, self._enter_logo_mode)
+            # 启动时只隐藏到托盘：屏幕右上角【不】出现 logo，logo 由托盘菜单唤出
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+            _kzc_log('  启动隐藏到托盘（不出 logo，等托盘菜单唤出）')
+        else:
+            self._main_visible = True
+        # H 键监听线程（logo 态下前台窗口是 logo 时按 H 直接展开主界面）
+        threading.Thread(target=self._h_key_watcher, daemon=True).start()
+        try:
+            self.root.after(50, self._poll_h_key)
+        except Exception:
+            pass
         _kzc_log(f'启动完成: start_minimal={self.config.get("start_minimal", True)}')
 
     def _toggle_main(self, event=None):
         """按 H 键：logo 态 → 主窗口态（root deiconify）"""
+        # 在输入框里打字时按 h 不应触发切换（否则输入 h 会把窗口收起来）
+        try:
+            fw = self.root.focus_get()
+            if fw is not None and fw.winfo_class() in ('Entry', 'TEntry', 'Text',
+                                                        'Spinbox', 'TSpinbox'):
+                return None
+        except Exception:
+            pass
+        # 防抖：Tk 绑定和 Win32 监听器可能同时触发，0.4 秒内只响应一次
+        now = time.time()
+        if now - getattr(self, '_toggle_ts', 0) < 0.4:
+            return 'break'
+        self._toggle_ts = now
         _kzc_log(f'H 键: main_visible={self._main_visible}, logo={self._logo_window is not None}')
         if self._main_visible:
             # 当前主窗口 → 切回 logo 模式
@@ -1935,6 +1972,9 @@ class TerminalApp:
                 except Exception:
                     pass
                 self._logo_window = None
+                self._logo_canvas = None
+                self._logo_hwnd = None
+                self._close_logo_hint()
             # 2) root deiconify + 800x680
             try:
                 self.root.deiconify()
@@ -1951,19 +1991,25 @@ class TerminalApp:
         return 'break'
 
     def _toggle_logo(self):
-        """托盘点击：切换 logo 模式（防偷窥第一步）"""
-        _kzc_log(f'托盘点击: main_visible={self._main_visible}')
-        if getattr(self, '_main_visible', False):
-            self._enter_logo_mode()
-        else:
+        """托盘点击：显示/隐藏右上角 logo 小图标
+        语义：logo 已存在 → 销毁（回托盘）；logo 不存在 → 在屏幕右上角浮出 logo
+        """
+        _kzc_log(f'托盘点击: logo存在={self._logo_window is not None}, main_visible={self._main_visible}')
+        if self._logo_window is not None:
             # 当前是 logo 模式 → 完全隐藏（销毁 logo 窗，仅留托盘）
-            if self._logo_window is not None:
-                try:
-                    self._logo_window.destroy()
-                except Exception:
-                    pass
-                self._logo_window = None
-            _kzc_log('  完全隐藏到托盘')
+            try:
+                self._logo_window.destroy()
+            except Exception:
+                pass
+            self._logo_window = None
+            self._logo_canvas = None
+            self._logo_hwnd = None
+            self._close_logo_hint()
+            self._main_visible = False
+            _kzc_log('  logo 已隐藏，回托盘')
+        else:
+            # 托盘态 → 在屏幕右上角浮出 logo
+            self._enter_logo_mode()
 
     def _hide_to_tray(self):
         """点 X：完全隐藏到托盘（销毁 logo 窗）"""
@@ -1973,6 +2019,9 @@ class TerminalApp:
             except Exception:
                 pass
             self._logo_window = None
+        self._logo_canvas = None
+        self._logo_hwnd = None
+        self._close_logo_hint()
         try:
             self.root.withdraw()
         except Exception:
@@ -1980,7 +2029,10 @@ class TerminalApp:
         self._main_visible = False
 
     def _enter_logo_mode(self):
-        """进入 logo 模式：root 完全隐藏 + 独立 Toplevel 显示 64x64 KZC logo 图标在屏幕右上角"""
+        """进入 logo 模式：root 完全隐藏 + 独立 Toplevel 显示 64x64 KZC logo 图标在屏幕右上角
+        - 右上角红色 X 按钮：点 X 关闭 logo，回到托盘
+        - 点 logo 本体：让 logo 窗获得键盘焦点（出现蓝色高亮框），此时按 H 键展开主界面
+        """
         _kzc_log('========== _enter_logo_mode 开始 ==========')
         try:
             # 1) 彻底隐藏主窗口
@@ -2001,6 +2053,17 @@ class TerminalApp:
                 lw.overrideredirect(True)
                 lw.attributes('-topmost', True)
                 lw.configure(bg='#1a1a2e')
+                lw.resizable(False, False)
+                self._logo_canvas = None
+                # 固定 64x64 容器
+                frame = tk.Frame(lw, width=64, height=64, bg='#1a1a2e')
+                frame.pack_propagate(False)
+                frame.pack(fill='both', expand=True)
+                # 用 Canvas 画图标，方便画聚焦高亮框
+                canvas = tk.Canvas(frame, width=64, height=64, bg='#1a1a2e',
+                                   highlightthickness=0, bd=0, cursor='hand2')
+                canvas.place(x=0, y=0, width=64, height=64)
+                self._logo_canvas = canvas
                 # 加载 icon.ico 显示为 PhotoImage
                 try:
                     from PIL import Image, ImageTk
@@ -2014,50 +2077,241 @@ class TerminalApp:
                     img = Image.open(icon_path)
                     img = img.resize((64, 64), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
-                    label = tk.Label(lw, image=photo, bg='#1a1a2e', bd=0)
-                    label.image = photo
-                    label.pack()
+                    canvas.create_image(32, 32, image=photo)
+                    canvas.image = photo          # 防止被 GC 回收
                 except Exception as e:
                     _kzc_log(f'  PIL 加载失败: {e}, 用 emoji 兜底')
-                    tk.Label(lw, text='🖥️', font=('Segoe UI Emoji', 28),
-                             bg='#1a1a2e', fg='white').pack(expand=True, fill='both')
+                    canvas.create_text(32, 32, text='\U0001f5a5\ufe0f',
+                                       fill='white', font=('Segoe UI Emoji', 28))
+                # 点 logo 本体 = 让它获得焦点（之后按 H 展开主界面）
+                canvas.configure(takefocus=True)
+                canvas.bind('<Button-1>', self._on_logo_click)
+                canvas.bind('<Key-h>', self._toggle_main)
+                canvas.bind('<Key-H>', self._toggle_main)
+                # 右上角红色 X 关闭按钮（Canvas 画叉，不依赖字体渲染）
+                xbtn = tk.Canvas(frame, width=18, height=18, bg='#c0392b',
+                                 highlightthickness=0, bd=0, cursor='hand2')
+                xbtn.place(x=46, y=0, width=18, height=18)
+                xbtn.create_line(4, 4, 14, 14, fill='white', width=2)
+                xbtn.create_line(14, 4, 4, 14, fill='white', width=2)
+                xbtn.bind('<Button-1>', self._on_logo_close)
                 lw.update_idletasks()
                 # 屏幕右上角
                 sw = lw.winfo_screenwidth()
                 lw.geometry(f'64x64+{sw-84}+20')
                 lw.update()
                 # 3) ctypes 解除 Toplevel 对 root 的父依赖，让它成为真正顶级窗（root withdraw 也能显示）
+                #    注意：SetParent 之后 GetParent 会返回 0，所以 hwnd 必须一次性取好、后面复用
+                hwnd = None
                 try:
                     import ctypes
-                    hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
-                    ctypes.windll.user32.SetParent(hwnd, 0)
+                    user32 = ctypes.windll.user32
+                    hwnd = user32.GetParent(lw.winfo_id())
+                    user32.SetParent(hwnd, 0)
+                    self._logo_hwnd = hwnd
                     _kzc_log(f'  step3 SetParent 独立顶级 hwnd={hwnd}')
                 except Exception as e:
                     _kzc_log(f'  step3 SetParent 失败: {e}')
-                # 4) 让 Toplevel 也不进任务栏
+                # 4) 让 Toplevel 也不进任务栏（必须用 step3 取到的 hwnd，SetParent 后 GetParent 已是 0）
                 try:
                     import ctypes
                     GWL_EXSTYLE = -20
                     WS_EX_TOOLWINDOW = 0x00000080
                     WS_EX_APPWINDOW = 0x00040000
-                    hwnd = ctypes.windll.user32.GetParent(lw.winfo_id())
-                    ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                    ex_style |= WS_EX_TOOLWINDOW
-                    ex_style &= ~WS_EX_APPWINDOW
-                    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
-                    _kzc_log(f'  step4 WS_EX_TOOLWINDOW hwnd={hwnd} ok')
+                    if hwnd:
+                        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                        ex_style |= WS_EX_TOOLWINDOW
+                        ex_style &= ~WS_EX_APPWINDOW
+                        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+                        _kzc_log(f'  step4 WS_EX_TOOLWINDOW hwnd={hwnd} ok')
                 except Exception as e:
                     _kzc_log(f'  step4 WS_EX_TOOLWINDOW 失败: {e}')
                 lw.bind('<Key-h>', self._toggle_main)
                 lw.bind('<Key-H>', self._toggle_main)
+                lw.bind('<FocusIn>', self._on_logo_focus_in)
+                lw.bind('<FocusOut>', self._on_logo_focus_out)
                 self._logo_window = lw
                 _kzc_log(f'  step5 logo 窗创建: geometry={lw.geometry()}, state={lw.state()}, viewable={lw.winfo_viewable()}')
+                # 创建完立即把焦点给 logo 窗，这样不点也能直接按 H
+                try:
+                    lw.focus_force()
+                    lw.lift()
+                except Exception:
+                    pass
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    if hwnd:
+                        user32.SetForegroundWindow(hwnd)
+                        user32.SetFocus(hwnd)
+                except Exception:
+                    pass
             self._main_visible = False
-            _kzc_log(f'========== _enter_logo_mode 完成 ==========')
+            _kzc_log('========== _enter_logo_mode 完成 ==========')
         except Exception as e:
             _kzc_log(f'  logo 启动失败: {e}')
             import traceback
             traceback.print_exc()
+
+    def _h_key_watcher(self):
+        """后台监听 H 键：当 logo 窗是前台窗口时，按 H 直接展开主界面
+        （Tk 的键盘焦点在无边框置顶窗上不稳定，这里用 Win32 兜底保证能用）
+        本线程只负责投递信号，实际动作由主线程执行（Tkinter 非线程安全）
+        """
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+        except Exception:
+            return
+        VK_H = 0x48
+        prev_down = False
+        while True:
+            try:
+                if self._logo_window is None or self._main_visible or not self._logo_hwnd:
+                    prev_down = False
+                    time.sleep(0.05)
+                    continue
+                fg = user32.GetForegroundWindow()
+                if fg != self._logo_hwnd:
+                    prev_down = False
+                    time.sleep(0.05)
+                    continue
+                down = bool(user32.GetAsyncKeyState(VK_H) & 0x8000)
+                if down and not prev_down:
+                    # 边沿触发，只在按下瞬间投递一次信号
+                    try:
+                        self._h_signal.put(1)
+                    except Exception:
+                        pass
+                prev_down = down
+            except Exception:
+                pass
+            time.sleep(0.03)
+
+    def _poll_h_key(self):
+        """主线程轮询 H 键信号（每 50ms 一次）"""
+        try:
+            while True:
+                try:
+                    self._h_signal.get_nowait()
+                except Exception:
+                    break
+                self._toggle_main()
+        except Exception:
+            pass
+        try:
+            self.root.after(50, self._poll_h_key)
+        except Exception:
+            pass
+
+    def _on_logo_click(self, event=None):
+        """点 logo 图标本体：让 logo 窗拿到键盘焦点（蓝框提示）+ 弹出"按 H 键展开"提示条"""
+        _kzc_log('点击 logo 图标 → 获取焦点（按 H 展开主界面）')
+        try:
+            if self._logo_window is not None:
+                self._logo_window.focus_force()
+                self._logo_window.lift()
+            if self._logo_canvas is not None:
+                self._logo_canvas.focus_set()
+        except Exception as e:
+            _kzc_log(f'  logo 聚焦失败: {e}')
+        # Win32 层兜底：SetParent 之后 Tk 的 focus_force 可能不落到真实 HWND，
+        # 这里直接把键盘焦点给 logo 顶层窗口，保证按 H 能被收到
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            if self._logo_hwnd:
+                user32.SetForegroundWindow(self._logo_hwnd)
+                user32.SetFocus(self._logo_hwnd)
+        except Exception:
+            pass
+        try:
+            self._show_logo_hint()
+        except Exception as e:
+            _kzc_log(f'  提示条失败: {e}')
+        return 'break'
+
+    def _show_logo_hint(self):
+        """在 logo 下方弹一条"按 H 键展开主界面"提示，2.6 秒后自动消失"""
+        self._close_logo_hint()
+        lw = self._logo_window
+        if lw is None:
+            return
+        try:
+            hint = tk.Toplevel(self.root)
+            hint.overrideredirect(True)
+            hint.attributes('-topmost', True)
+            hint.configure(bg='#1a1a2e')
+            lbl = tk.Label(hint, text='按 H 键展开主界面', bg='#1a1a2e', fg='#4fc3f7',
+                           font=('Microsoft YaHei UI', 9), padx=8, pady=3)
+            lbl.pack()
+            hint.update_idletasks()
+            # 先解除父依赖 + 去掉任务栏样式，避免 root withdraw 后不显示 / 闪任务栏
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                GWL_EXSTYLE = -20
+                WS_EX_TOOLWINDOW = 0x00000080
+                WS_EX_APPWINDOW = 0x00040000
+                hh_ = user32.GetParent(hint.winfo_id())
+                if hh_:
+                    user32.SetParent(hh_, 0)
+                    ex = user32.GetWindowLongW(hh_, GWL_EXSTYLE)
+                    ex |= WS_EX_TOOLWINDOW
+                    ex &= ~WS_EX_APPWINDOW
+                    user32.SetWindowLongW(hh_, GWL_EXSTYLE, ex)
+            except Exception:
+                pass
+            hw = hint.winfo_reqwidth()
+            hh = hint.winfo_reqheight()
+            x = max(0, lw.winfo_x() + 32 - hw // 2)
+            y = lw.winfo_y() + 66
+            hint.geometry(f'{hw}x{hh}+{x}+{y}')
+            hint.update()
+            self._logo_hint = hint
+            try:
+                hint.after(2600, self._close_logo_hint)
+            except Exception:
+                pass
+        except Exception as e:
+            _kzc_log(f'  提示条创建失败: {e}')
+
+    def _close_logo_hint(self):
+        """关闭 logo 下方的提示条"""
+        hint = getattr(self, '_logo_hint', None)
+        if hint is not None:
+            try:
+                hint.destroy()
+            except Exception:
+                pass
+            self._logo_hint = None
+
+    def _on_logo_close(self, event=None):
+        """点 logo 右上角 X：关闭 logo，回到托盘"""
+        _kzc_log('点击 logo 上的 X → 关闭 logo 回托盘')
+        try:
+            self._hide_to_tray()
+        except Exception as e:
+            _kzc_log(f'  关闭 logo 失败: {e}')
+        return 'break'
+
+    def _on_logo_focus_in(self, event=None):
+        """logo 窗获得焦点：画蓝色高亮框，提示"现在可以按 H 键了" """
+        try:
+            if self._logo_canvas is not None:
+                self._logo_canvas.delete('focusring')
+                self._logo_canvas.create_rectangle(1, 1, 62, 62, outline='#4fc3f7',
+                                                   width=2, tags='focusring')
+        except Exception:
+            pass
+
+    def _on_logo_focus_out(self, event=None):
+        """logo 窗失去焦点：去掉高亮框"""
+        try:
+            if self._logo_canvas is not None:
+                self._logo_canvas.delete('focusring')
+        except Exception:
+            pass
 
     def _on_http_command(self, data):
         """HTTP轮询收到指令"""
@@ -2673,8 +2927,11 @@ class TerminalApp:
         self.root.protocol('WM_DELETE_WINDOW', self._hide_to_tray)
         
         # 如果设置了启动时最小化到托盘，则隐藏窗口
-        if getattr(self, '_start_minimized', False):
-            self.root.after(100, self.root.withdraw)  # 延迟一点隐藏，确保窗口创建完成
+        if getattr(self, '_start_minimized', False) or getattr(self, '_start_hidden', False):
+            try:
+                self.root.withdraw()
+            except Exception:
+                self.root.after(100, self.root.withdraw)
             print('[托盘] 启动时最小化到托盘')
         
         self.root.mainloop()
